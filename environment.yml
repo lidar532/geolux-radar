@@ -1,0 +1,13 @@
+# Mamba / conda-forge environment for the Geolux LX-80 radar tools.
+#
+#   mamba env create -f environment.yml
+#   mamba activate radar
+#
+# Do not use pip inside this environment.
+name: radar
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.9        # 3.10+ if you want a bokeh newer than 3.4.x
+  - pyserial>=3.5
+  - bokeh>=3.4
