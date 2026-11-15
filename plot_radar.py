@@ -2,7 +2,7 @@
 """
 Plot Geolux LX-80 radar logs (<stamp>-radar.txt) with Bokeh.
 
-The logs are the CSV files written by radar_tui.py:
+The logs are the CSV files written by geolux_tui.py:
     captured_at,epoch_seconds,actual_distance_m,average_distance_m,snr_db,temperature_c,raw_sentence
 
 Static mode (default) renders a self-contained HTML page:
@@ -12,7 +12,7 @@ Static mode (default) renders a self-contained HTML page:
     ./plot_radar.py 2026-1114-122308-radar.txt -o plot.html --no-open
 
 Live mode starts a Bokeh server that tails the log file and refreshes the
-plots while radar_tui.py keeps appending to it:
+plots while geolux_tui.py keeps appending to it:
 
     ./plot_radar.py --live 2026-1114-122308-radar.txt --port 5006
 
@@ -393,14 +393,14 @@ plot_radar.py [-h | --help | -?] [FILE] [-o OUTPUT] [--live] [--port PORT]
               [--interval SEC] [--no-open] [--inline] [--max-points N]"""
 
 DESCRIPTION_HELP = """\
-Plot Geolux LX-80 radar logs (<stamp>-radar.txt, written by radar_tui.py)
+Plot Geolux LX-80 radar logs (<stamp>-radar.txt, written by geolux_tui.py)
 with Bokeh.  Three linked panels show distance, SNR and instrument
 temperature against the capture time, with hover tools, zoom/pan tools and a
 summary banner.
 
 Static mode (default) writes a self-contained HTML page and opens it.  Live
 mode (--live) starts a Bokeh server that tails the log file and refreshes the
-plots while radar_tui.py keeps appending to it."""
+plots while geolux_tui.py keeps appending to it."""
 
 EPILOG_HELP = """\
 examples:
@@ -413,7 +413,7 @@ examples:
   ./plot_radar.py --max-points 20000          decimate a long log
 
 input files:
-  CSV logs written by radar_tui.py, named <stamp>-radar.txt:
+  CSV logs written by geolux_tui.py, named <stamp>-radar.txt:
     captured_at, epoch_seconds, actual_distance_<unit>, average_distance_<unit>,
     snr_db, temperature_c, raw_sentence
   The distance unit is taken from the header suffix, so m, ft, mm, cm and in
@@ -432,7 +432,7 @@ panels (x axis linked, one shared toolbar):
 
 live mode:
   --live serves a Bokeh app that tails FILE and streams newly appended rows
-  into the plots, so it can run alongside radar_tui.py.  Only complete lines
+  into the plots, so it can run alongside geolux_tui.py.  Only complete lines
   are parsed (a half-written row is never read), and --max-points caps how
   many points stay in memory.
 

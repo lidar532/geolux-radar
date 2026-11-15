@@ -1,7 +1,7 @@
 # Reference only -- the supported install is environment.yml (mamba/conda-forge).
 # Do not use pip for this project; see README.md "Install".
 #
-# radar_tui.py
+# geolux_tui.py
 pyserial>=3.5
 # plot_radar.py
 bokeh>=3.4          # bokeh 3.4.x is the last line that supports Python 3.9

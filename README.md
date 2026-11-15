@@ -1,18 +1,20 @@
 # Geolux LX-80 radar tools
 
+2026-1014 W. Wright github.com/lidar532
+
 Two Python programs for a [Geolux LX-80](https://www.geolux.hr/) non-contact
 radar level meter connected over RS-232 (USB serial adapter):
 
 | Program | Purpose |
 |---|---|
-| `radar_tui.py` | Live terminal UI, RS-232 transmit-line probe with success tally, device settings browser, parameter editing and CSV logging |
+| `geolux_tui.py` | Live terminal UI, RS-232 transmit-line probe with success tally, device settings browser, parameter editing and CSV logging |
 | `plot_radar.py` | Bokeh plots of the logged CSV files (static HTML or auto-refreshing live server) |
 | `environment.yml` | mamba environment (conda-forge) with `pyserial` and `bokeh` |
 
 Repository layout:
 
 ```
-radar_tui.py        live TUI, TX probe, settings, parameter editing, CSV logging
+geolux_tui.py        live TUI, TX probe, settings, parameter editing, CSV logging
 plot_radar.py       Bokeh plots (static HTML or live server) of the CSV logs
 environment.yml     mamba environment (conda-forge)
 requirements.txt    reference only - the supported install is mamba
@@ -31,7 +33,7 @@ metres at ~10 Hz. Reference: *LX-80 User Manual* v2.7.2, chapters 6.1
 1. [Install](#install)
 2. [Quick start](#quick-start)
 3. [Install and run on WSL2 (step by step)](#install-and-run-on-wsl2-step-by-step)
-4. [radar_tui.py — the TUI](#radar_tuipy--the-tui)
+4. [geolux_tui.py — the TUI](#geolux_tuipy--the-tui)
 5. [Files written](#files-written)
 6. [TX probe and link diagnostics](#tx-probe-and-link-diagnostics)
 7. [Changing device parameters](#changing-device-parameters)
@@ -95,7 +97,7 @@ ship with CPython on Linux, so no system packages are required.
 ### 3. Run without activating (scripts, cron, systemd)
 
 ```bash
-mamba run -n radar ./radar_tui.py -d ~/radar-logs
+mamba run -n radar ./geolux_tui.py -d ~/radar-logs
 ```
 
 ### 4. Serial port access
@@ -110,7 +112,7 @@ ls -l /dev/ttyUSB0                   # usually root:dialout, 660
 ### 5. Make the programs executable (optional)
 
 ```bash
-chmod +x radar_tui.py plot_radar.py
+chmod +x geolux_tui.py plot_radar.py
 ```
 
 Both programs print extensive help with `--help`, `-h` or `-?`.
@@ -121,9 +123,9 @@ Both programs print extensive help with `--help`, `-h` or `-?`.
 
 ```bash
 mamba activate radar
-./radar_tui.py                                   # live TUI on /dev/ttyUSB0
-./radar_tui.py -d ~/radar-logs                   # logs go elsewhere
-./radar_tui.py --no-tui --duration 60            # one minute, plain text
+./geolux_tui.py                                   # live TUI on /dev/ttyUSB0
+./geolux_tui.py -d ~/radar-logs                   # logs go elsewhere
+./geolux_tui.py --no-tui --duration 60            # one minute, plain text
 ./plot_radar.py                                  # plot the newest log file
 ./plot_radar.py --live --no-open                 # live plot on :5006
 ```
@@ -233,7 +235,7 @@ python -c "import serial, bokeh; print(serial.__version__, bokeh.__version__)"
 ### Step 6 — WSL2: first run
 
 ```bash
-./radar_tui.py
+./geolux_tui.py
 ```
 
 A working start looks like this — note the **TX probe tally**, which proves the
@@ -254,8 +256,8 @@ settings, `g` refresh, `c` reset counters, `Esc` close a panel.
 ### Step 7 — WSL2: record and plot
 
 ```bash
-./radar_tui.py -d ~/radar-logs                      # TUI + CSV
-./radar_tui.py --no-tui --duration 3600 -d ~/radar-logs
+./geolux_tui.py -d ~/radar-logs                      # TUI + CSV
+./geolux_tui.py --no-tui --duration 3600 -d ~/radar-logs
 ./plot_radar.py --no-open                           # static HTML
 ./plot_radar.py --live --no-open --port 5006        # http://localhost:5006
 ```
@@ -272,7 +274,7 @@ usbipd attach --wsl --busid 1-3 # if it shows "Shared" again
 
 ```bash
 mamba activate radar
-cd ~/github-projects/geolux-radar && ./radar_tui.py
+cd ~/github-projects/geolux-radar && ./geolux_tui.py
 ```
 
 ---
@@ -326,15 +328,15 @@ cd ~/github-projects/geolux-radar && ./radar_tui.py
 14. **The TUI looks broken in the legacy console.** Use **Windows Terminal**;
     it sets `TERM=xterm-256color`, so box drawing, colours and the alternate
     screen work. In other terminals, test with
-    `TERM=xterm-256color ./radar_tui.py`.
+    `TERM=xterm-256color ./geolux_tui.py`.
 15. **Working directory on `/mnt/c`.** I/O is very slow over the 9p mount
     (visible with the flush-per-row CSV logging), and files there may be
-    mounted `noexec` so `./radar_tui.py` fails. Keep the project in
-    `~/`, and use `python radar_tui.py` if execution is refused.
+    mounted `noexec` so `./geolux_tui.py` fails. Keep the project in
+    `~/`, and use `python geolux_tui.py` if execution is refused.
 16. **CRLF line endings.** If the files came from Windows, the `#!` line ends
-    in `\r` and `./radar_tui.py` fails with
+    in `\r` and `./geolux_tui.py` fails with
     `bad interpreter: /usr/bin/env python3^M`. Fix with
-    `sed -i 's/\r$//' radar_tui.py plot_radar.py` (or `dos2unix`).
+    `sed -i 's/\r$//' geolux_tui.py plot_radar.py` (or `dos2unix`).
 17. **Clock drift after sleep/resume.** WSL2's clock can jump, which shows up
     as odd `captured_at` values in the CSV. `sudo hwclock -s` (with systemd
     enabled) or `wsl --shutdown` and reopen fixes it.
@@ -353,7 +355,7 @@ cd ~/github-projects/geolux-radar && ./radar_tui.py
     `mamba install -c conda-forge <package>`.
 21. **`mamba activate` does nothing in a script.** Activation is a shell
     function; for non-interactive use either source the hook or run
-    `mamba run -n radar ./radar_tui.py`.
+    `mamba run -n radar ./geolux_tui.py`.
 22. **Solving is slow.** Use `mamba` (not `conda`) — it is the fast solver.
     Optional: `mamba config --set channel_priority strict` in `~/.condarc`.
 23. **bokeh version vs Python version.** Bokeh 3.4.x is the last release that
@@ -389,7 +391,7 @@ cd ~/github-projects/geolux-radar && ./radar_tui.py
 
 ---
 
-## radar_tui.py — the TUI
+## geolux_tui.py — the TUI
 
 ### Layout
 
@@ -456,9 +458,9 @@ unit is used in the CSV column names.
 ### Command line options
 
 ```
-radar_tui.py [-h | --help | -?] [-p PORT] [-b BAUD] [--units UNIT] [-d DIR]
-             [--no-log] [--no-tui] [--no-probe] [--probe-interval SEC]
-             [--probe-timeout SEC] [--duration SEC]
+geolux_tui.py [-h | --help | -?] [-p PORT] [-b BAUD] [--units UNIT] [-d DIR]
+               [--no-log] [--no-tui] [--no-probe] [--probe-interval SEC]
+               [--probe-timeout SEC] [--duration SEC]
 ```
 
 | Option | Default | Meaning |
@@ -478,12 +480,12 @@ radar_tui.py [-h | --help | -?] [-p PORT] [-b BAUD] [--units UNIT] [-d DIR]
 Examples:
 
 ```bash
-./radar_tui.py                        # TUI + logging in the current directory
-./radar_tui.py -p /dev/ttyUSB1        # another port
-./radar_tui.py --no-tui               # usable over ssh or piped to a file
-./radar_tui.py --no-probe             # strictly read-only
-./radar_tui.py --no-tui --duration 60 # record one minute, then exit
-./radar_tui.py -b 9600                # device whose RS-232 baud was changed
+./geolux_tui.py                        # TUI + logging in the current directory
+./geolux_tui.py -p /dev/ttyUSB1        # another port
+./geolux_tui.py --no-tui               # usable over ssh or piped to a file
+./geolux_tui.py --no-probe             # strictly read-only
+./geolux_tui.py --no-tui --duration 60 # record one minute, then exit
+./geolux_tui.py -b 9600                # device whose RS-232 baud was changed
 ```
 
 Exit status: `0` normal, `2` port could not be opened / pyserial missing.
@@ -564,7 +566,7 @@ protocol answers requests on the same RS-232 port, so a reply to the
 `#get_info` command proves the **host → device** path (our TX line, the
 adapter and the device's RX).
 
-`radar_tui.py` sends `#get_info` at start-up and then every
+`geolux_tui.py` sends `#get_info` at start-up and then every
 `--probe-interval` seconds (default 10 s), and tallies the results:
 
 * the reply is complete when a `$` sentence arrives after at least one `#`
@@ -619,7 +621,7 @@ Details:
 * Every write is recorded in `<stamp>-radar-cmd.log`.
 
 Currently exposed (add more by extending the `PARAMS` table in
-`radar_tui.py`):
+`geolux_tui.py`):
 
 | Parameter | Command | Range | Notes |
 |---|---|---|---|
@@ -752,7 +754,7 @@ temperature; a banner above the plots summarises samples, duration,
 min/median/max distance, median SNR and average temperature.
 
 Live mode tails the file and streams only complete lines (never a half-written
-row), so it can run while `radar_tui.py` is still appending. The unit is read
+row), so it can run while `geolux_tui.py` is still appending. The unit is read
 from the CSV header, so `m`, `ft`, `mm`, `cm` and `in` all work, and empty
 cells are plotted as gaps.
 
@@ -777,7 +779,7 @@ Verified on firmware **2.5.4** (serial 102181):
    | `0.25` | `0.250` | 0.250 |
 
    The values **are** applied correctly — measured distance shifts of
-   +0.050, +0.010 and −0.250 confirmed it — so `radar_tui.py` decodes this
+   +0.050, +0.010 and −0.250 confirmed it — so `geolux_tui.py` decodes this
    format before comparing, and shows both, e.g.
    `read-back : 0.000 [raw 0.0] -> 0.050 [raw 0.50]`. `sensor_height` happens
    to be printed zero padded (`12.500`, `9.050`), but three fractional digits
@@ -824,7 +826,7 @@ Verified on firmware **2.5.4** (serial 102181):
 
 ## Design notes and extending
 
-`radar_tui.py` runs three things:
+`geolux_tui.py` runs three things:
 
 * **reader thread** — `readline()`, strips `\r`, validates checksums, updates
   shared state, writes CSV rows, and feeds `#` lines to the link monitor;
@@ -835,7 +837,7 @@ Verified on firmware **2.5.4** (serial 102181):
   never blocks on serial I/O.
 
 Adding a settable parameter takes one entry in the `PARAMS` table at the top
-of `radar_tui.py`:
+of `geolux_tui.py`:
 
 ```python
 {

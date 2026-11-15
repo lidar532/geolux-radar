@@ -1303,9 +1303,9 @@ def run_headless(shared: SharedState, meta, recorder, link):
 # main
 # --------------------------------------------------------------------------
 USAGE_HELP = """\
-radar_tui.py [-h | --help | -?] [-p PORT] [-b BAUD] [--units UNIT] [-d DIR]
-             [--no-log] [--no-tui] [--no-probe] [--probe-interval SEC]
-             [--probe-timeout SEC] [--duration SEC]"""
+geolux_tui.py [-h | --help | -?] [-p PORT] [-b BAUD] [--units UNIT] [-d DIR]
+               [--no-log] [--no-tui] [--no-probe] [--probe-interval SEC]
+               [--probe-timeout SEC] [--duration SEC]"""
 
 DESCRIPTION_HELP = """\
 Geolux LX-80 non-contact radar level meter: live terminal UI, RS-232
@@ -1319,14 +1319,14 @@ device parameters."""
 
 EPILOG_HELP = """\
 examples:
-  ./radar_tui.py                        live TUI on /dev/ttyUSB0 at 115200
-  ./radar_tui.py -p /dev/ttyUSB1        use another serial port
-  ./radar_tui.py -d ~/radar-logs        write the log files elsewhere
-  ./radar_tui.py --no-tui               plain text output (ssh, pipes, logs)
-  ./radar_tui.py --no-tui --duration 60 record one minute, then exit
-  ./radar_tui.py --no-probe             read-only: never write to the device
-  ./radar_tui.py --units ft             override the unit label
-  ./radar_tui.py -b 9600                device whose RS-232 baud was changed
+  ./geolux_tui.py                        live TUI on /dev/ttyUSB0 at 115200
+  ./geolux_tui.py -p /dev/ttyUSB1        use another serial port
+  ./geolux_tui.py -d ~/radar-logs        write the log files elsewhere
+  ./geolux_tui.py --no-tui               plain text output (ssh, pipes, logs)
+  ./geolux_tui.py --no-tui --duration 60 record one minute, then exit
+  ./geolux_tui.py --no-probe             read-only: never write to the device
+  ./geolux_tui.py --units ft             override the unit label
+  ./geolux_tui.py -b 9600                device whose RS-232 baud was changed
 
 tui keys:
   q  quit                    p  pause / resume CSV logging
@@ -1415,7 +1415,7 @@ exit status:
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(
-        prog="radar_tui.py",
+        prog="geolux_tui.py",
         add_help=False,
         usage=USAGE_HELP,
         description=DESCRIPTION_HELP,
