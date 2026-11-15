@@ -2,7 +2,7 @@
 
 2026-1014 W. Wright github.com/lidar532
 
-Version **1.0.0** (`version.py`, git tag `v1.0.0`). The version is shown by
+Version **1.0.1** (`version.py`, git tag `v1.0.1`). The version is shown by
 `--version` in both programs, in the TUI header and help overlay, and in the
 title and summary banner of every plot.
 
@@ -875,6 +875,15 @@ Verified on firmware **2.5.4** (serial 102181):
    [Changing device parameters](#changing-device-parameters)).
 
 6. **`$WAV` is undocumented** and ignored, along with any unknown sentence.
+
+7. **NUL bytes can appear inside a sentence.** On 2026-11-15 the unit sent
+   `$LVX,3.606,3\x00.571,...*67` three times. The NUL is inside the checksummed
+   body, so the XOR check passes and the frame is logged verbatim (it is also
+   why that row has an empty `average_distance` cell — the corrupted token is
+   not a number). `plot_radar.py` replaces NUL with `U+FFFD` before parsing,
+   otherwise Python's `csv` module refuses the whole file
+   (`_csv.Error: line contains NUL`); the affected value becomes a gap while
+   the rest of the log plots normally.
 
 ---
 

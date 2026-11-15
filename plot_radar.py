@@ -174,20 +174,26 @@ def gunzip_text(data: bytes) -> str:
     return b"".join(parts).decode("utf-8", "replace")
 
 
+NUL = "\x00"
+NUL_REPLACEMENT = "\ufffd"      # visible placeholder, keeps the CSV parseable
+
+
 def read_text(path: str) -> str:
-    """Read a log file, transparently decompressing gzip."""
+    """Read a log file, transparently decompressing gzip.
+
+    NUL bytes are replaced: the LX-80 occasionally emits one inside a sentence
+    (seen on 2026-11-15) and it passes the device's own XOR checksum, but
+    Python's csv module rejects any line containing NUL.
+    """
     with open(path, "rb") as fh:
         data = fh.read()
-    if is_gzip(path):
-        return gunzip_text(data)
-    return data.decode("utf-8", "replace")
+    text = gunzip_text(data) if is_gzip(path) else data.decode("utf-8", "replace")
+    return text.replace(NUL, NUL_REPLACEMENT)
 
 
 def open_log(path: str):
     """Open a CSV log for reading: plain or gzipped, always as text."""
-    if is_gzip(path):
-        return io.StringIO(read_text(path))
-    return open(path, newline="", encoding="utf-8", errors="replace")
+    return io.StringIO(read_text(path))
 
 
 def default_output(path: str) -> str:
@@ -354,7 +360,8 @@ def tail_rows(path: str, offset: int, cols: dict):
     end = chunk.rfind(b"\n")
     if end < 0:                # partial line still being written
         return [], offset
-    text = chunk[: end + 1].decode("utf-8", "replace")
+    text = (chunk[: end + 1].decode("utf-8", "replace")
+            .replace(NUL, NUL_REPLACEMENT))
     new_offset = offset + end + 1
     return _parse_lines(text.splitlines(), cols), new_offset
 
@@ -640,7 +647,9 @@ input files:
   Compression is detected from the .gz suffix or the gzip magic bytes, so
   plain <stamp>-radar.txt logs from older runs are still accepted.  The
   distance unit is taken from the header suffix, so m, ft, mm, cm and in all
-  work.  Missing values (empty cells) are plotted as gaps.
+  work.  Missing values (empty cells) are plotted as gaps.  NUL bytes that
+  occasionally appear in a device sentence (they pass the device checksum)
+  are replaced with U+FFFD, because Python's csv module rejects NUL.
 
   FILE may also be a directory (for example ./data or a dated capture
   directory): every *-radar.txt[.gz] found there - subdirectories included -
