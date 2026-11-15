@@ -45,6 +45,7 @@ metres at ~10 Hz. Reference: *LX-80 User Manual* v2.7.2, chapters 6.1
 12. [Troubleshooting](#troubleshooting)
 13. [Design notes and extending](#design-notes-and-extending)
 14. [Limitations](#limitations)
+15. [License](#license)
 
 ---
 
@@ -868,3 +869,9 @@ of `geolux_tui.py`:
 * The measurement/output rate cannot be changed (firmware).
 * `plot_radar.py --live` relies on a Bokeh server; the static HTML mode is
   enough for reviewing a finished capture.
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+Copyright (c) 2026 W. Wright (github.com/lidar532)

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+2026-1014
+W. Wright
+github.com/lidar532
+
+
 Plot Geolux LX-80 radar logs (<stamp>-radar.txt) with Bokeh.
 
 The logs are the CSV files written by geolux_tui.py:
