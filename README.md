@@ -2,7 +2,7 @@
 
 2026-1014 W. Wright github.com/lidar532
 
-Version **1.2.1** (`version.py`, git tag `v1.2.1`). The version is shown by
+Version **1.3.0** (`version.py`, git tag `v1.3.0`). The version is shown by
 `--version` in both programs, in the TUI header and help overlay, and in the
 title and summary banner of every plot.  The repository URL
 (`https://github.com/lidar532/geolux-radar`, from `version.py`) is displayed at
@@ -262,8 +262,8 @@ adapter's transmit line reaches the device:
 ```
 
 Keys: `q` quit, `p` pause logging, `f` freeze, `s` set parameter, `r` factory
-reset, `i` device settings, `g` refresh, `c` reset counters, `?` help, `Esc`
-close a panel.
+reset, `b` reboot, `i` device settings, `g` refresh, `c` reset counters,
+`?` help, `Esc` close a panel.
 
 ### Step 7 — WSL2: record and plot
 
@@ -417,7 +417,7 @@ cd ~/github-projects/geolux-radar && ./geolux_tui.py
 ...
  csum 0 err / 2345 sent (0.00%) · no errors   ·   c: reset
  $LVX,3.576,3.576,32,6.423,6.423,47.250,1.115*5F
- q quit  p pause log  f freeze  s set  r reset  i settings  g refresh  ? help
+ q quit  p pause log  f freeze  s set  r reset  b reboot  i settings  g refresh  ? help
 ```
 
 * **Header** — port/baud, state, frame rate, frame count and time since the
@@ -462,7 +462,8 @@ unit is used in the CSV column names.
 | `p` | pause / resume CSV logging (probing continues) |
 | `f` | freeze the display (values and raw line) |
 | `s` | open the **set parameter** dialog |
-| `r` | **factory reset** the device (type `RESET` to confirm) |
+| `r` | **factory reset** the device (`Are you sure?` popup, `y`/`n`) |
+| `b` | **reboot** the device, settings kept (`Are you sure?` popup) |
 | `i` | device settings panel (the whole `#get_info` block) |
 | `g` | probe now / refresh the settings |
 | `c` | reset the checksum counters |
@@ -698,10 +699,10 @@ knob.
 
 ### Resetting the unit
 
-Press `r` to factory-reset the LX-80.  The dialog lists what will be lost and
-nothing is transmitted until you type `RESET` and press `Enter` (`Esc`
-cancels at any point before that).  `r` then sends `#factory_reset` and the
-exchange is appended to `<stamp>-radar-cmd.log.gz`.
+Press `r` to factory-reset the LX-80.  A popup lists what will be lost and
+asks **Are you sure?** — press `y` to send, `n` or `Esc` to cancel; nothing is
+transmitted before that.  `r` then sends `#factory_reset` and the exchange is
+appended to `<stamp>-radar-cmd.log.gz`.
 
 > **This erases every setting**: unit, sensor height, level offset, dead zone
 > min/max, averaging frames, filter type, power save and baud rate.
@@ -737,6 +738,37 @@ until you set the unit and sensor height again.  Press `g` after the reset to
 refresh the settings panel, and take a snapshot before resetting if you need
 to restore the configuration.
 
+### Rebooting the unit
+
+Press `b` to restart the LX-80 without touching its settings.  The same
+**Are you sure?** popup is shown and `#reset` is sent.  This command is *not*
+in the manual — it was found while probing the servicing protocol — and it
+behaves as follows on firmware 2.5.4 (verified 2026-11-15):
+
+```
+sent     #reset                 (no reply)
+         NMEA stops for ~4.3 s, then resumes at the configured rate
+         servicing link answers #get_info again after ~3.5 s
+         all settings unchanged (36 #get_info fields compared; only the
+         status field iwr_status reads 0 for a moment while booting)
+```
+
+The dialog reports how long the unit took to answer and whether any setting
+changed, and the probe log gets a `#reset` row.  Nothing else is needed: the
+measurement stream returns on its own, no power cycle and no reconfiguration.
+
+Restoring after a factory reset (verified): set the unit back first, then the
+other values, because dead zone, level range and analog scaling follow
+`unit_type`:
+
+```
+#set_unit=2                     # m
+#set_deadzone_min=0.200
+#set_deadzone_max=15.0
+#set_sensor_height=10.000
+#set_wave_analysis_length=3500  # undocumented, optional ($WAV only)
+```
+
 ---
 
 ## Protocol reference
@@ -765,7 +797,9 @@ Commands are ASCII, terminated with `\r\n`, and answered on the same port:
 ```
 #get_info                 ->  "# key:value" lines (36 fields on fw 2.5.4)
 #set_<param>=<value>      ->  "#set_<param>:OK"   (or no reply if rejected)
-#factory_reset            ->  needs a power cycle afterwards
+#factory_reset            ->  "#factory_reset:OK" + "#set_raw=<hex>" dump
+#reset                    ->  no reply; reboots and keeps the settings
+                              (undocumented, not in the manual)
 ```
 
 `#get_info` reply (abridged, test unit):
@@ -809,7 +843,7 @@ Geolux Instrument Configurator.
 | `#set_analog_min/max`, `#set_modbus_*`, `#set_sdi_id` | — | RS-485 / 4–20 mA only |
 | `#set_baud_rate=9600…115200` | RS-232 baud | **dangerous**: port must be reopened at the new rate |
 | `#set_sdi_sleep=0` | SDI-12 auto sleep | **dangerous**: RS-232 goes dead until power-cycled and reconfigured within 60 s |
-| `#factory_reset` | — | **dangerous**: erases all settings and needs a power cycle; exposed via `r` with typed confirmation |
+| `#factory_reset` | — | **dangerous**: erases all settings and needs a power cycle; exposed via `r` behind an `Are you sure?` popup |
 
 ---
 
@@ -939,6 +973,13 @@ Verified on firmware **2.5.4** (serial 102181):
    `level_range`/dead-zone/analog values are rescaled to mm — see
    [Resetting the unit](#resetting-the-unit).
 
+9. **`#reset` reboots without a factory reset.** It is undocumented but
+   accepted by firmware 2.5.4: no reply, NMEA stops for about 4.3 s and the
+   servicing link answers `#get_info` again after ~3.5 s, with every setting
+   preserved. Only `iwr_status` briefly reads `0` while the radar chip comes
+   up; the TUI ignores that status field when it says "settings preserved".
+   See [Rebooting the unit](#rebooting-the-unit).
+
 ---
 
 ## Troubleshooting
@@ -996,7 +1037,7 @@ of `geolux_tui.py`:
   documented settings need a raw-command prompt or the vendor application.
 * `#set_baud_rate` and `#set_sdi_sleep` are deliberately **not** exposed,
   because a mistake can strand the link.  `#factory_reset` *is* exposed as
-  `r`, but only behind a typed `RESET` confirmation (see
+  `r`, but only behind an `Are you sure?` popup (see
   [Resetting the unit](#resetting-the-unit)).
 * The measurement/output rate cannot be changed on the tested firmware; the
   command is exposed only so the read-back check can show that the device

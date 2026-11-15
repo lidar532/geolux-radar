@@ -72,6 +72,12 @@ def default_log_dir(now=None) -> str:
     return os.path.join(DATA_ROOT, now.strftime(DATE_DIR_FORMAT))
 GET_INFO = "#get_info"
 FACTORY_RESET = "#factory_reset"      # erases settings, needs a power cycle
+DEVICE_REBOOT = "#reset"              # undocumented: reboots, keeps settings
+
+# #get_info fields that are status, not settings: they change while the unit
+# boots (#reset makes iwr_status read 0 for a moment) and must not be reported
+# as "settings changed" after a reboot.
+VOLATILE_INFO = {"iwr_status"}
 CMD_TERMINATOR = "\r\n"
 
 # $LVX field order (firmware > 2.3.2).  Older firmware sends only L1..L4.
@@ -672,6 +678,8 @@ class LinkMonitor(threading.Thread):
             else:
                 if job[0] == "reset":
                     self._run_reset()
+                elif job[0] == "reboot":
+                    self._run_reboot()
                 else:                      # ("set", param, value)
                     self._run_set(job[1], job[2])
                 continue
@@ -719,6 +727,72 @@ class LinkMonitor(threading.Thread):
                 "cmd": FACTORY_RESET, "rtt": res["rtt"],
                 "message": msg, "started": res["start"],
             }
+
+    # -- reboot -------------------------------------------------------------
+    def submit_reboot(self):
+        """Queue #reset (reboot, settings kept); one command at a time."""
+        with self._lock:
+            job = self.job
+            if job is not None and not job.get("done", True):
+                return False                      # already busy
+            self.job = {
+                "label": "Reboot", "key": "reboot",
+                "done": False, "ok": None, "ack": [],
+                "cmd": DEVICE_REBOOT, "started": time.time(),
+                "message": "sending...",
+            }
+        self._jobs.put(("reboot",))
+        self.wake.set()
+        return True
+
+    def _run_reboot(self):
+        """Send #reset and wait for the unit to come back.
+
+        The device sends no reply, stops NMEA for ~4 s and keeps its
+        settings.  A reply to the follow-up probe means the command was
+        ignored (other firmware), which is reported as a failure.
+        """
+        before = dict(self.info)
+        res = self._exchange(DEVICE_REBOOT, timeout=1.0)
+
+        time.sleep(0.6)                    # let the unit go down
+        down = not self._exchange(GET_INFO, timeout=1.0)["lines"]
+        info = {}
+        if down:
+            start = time.time()
+            while time.time() - start < 25 and not self._stop_evt.is_set():
+                time.sleep(0.5)
+                info = parse_info(self._exchange(GET_INFO, timeout=2.0)["lines"])
+                if info:
+                    break
+            took = time.time() - res["start"]   # total downtime incl. probes
+            # only compare fields present in both reads: a probe cut short at
+            # start-up must not look like a setting change
+            changed = sum(1 for k in set(before) & set(info)
+                          if k not in VOLATILE_INFO
+                          and before.get(k) != info.get(k))
+            msg = f"device answered again after {took:.1f} s"
+            msg += (" - settings preserved" if not changed
+                    else f" - {changed} settings changed")
+        else:
+            msg = "no reboot detected - this firmware may ignore #reset"
+
+        ok = bool(info)
+        rec = {"start": res["start"], "rtt": None, "lines": res["lines"]}
+        self._record(DEVICE_REBOOT, ok, rec, error="" if ok else msg)
+        with self._lock:
+            self.job = {
+                "label": "Reboot", "key": "reboot", "done": True, "ok": ok,
+                "cmd": DEVICE_REBOOT, "ack": res["lines"], "message": msg,
+                "started": res["start"],
+            }
+        if info:
+            self.info = info
+            if self.snapshot_path:
+                try:
+                    write_info_snapshot(self.snapshot_path, info)
+                except OSError:
+                    pass
 
 
 # --------------------------------------------------------------------------
@@ -1172,7 +1246,8 @@ HELP_TEXT = f"""\
    p        pause / resume CSV logging (probing continues)
    f        freeze the display (values and raw line)
    s        set a device parameter (dialog)
-   r        factory reset (type RESET to confirm - see below)
+   r        factory reset ("Are you sure?" popup - see below)
+   b        reboot, settings kept ("Are you sure?" popup)
    i        device settings panel (the whole #get_info block)
    g        probe now / refresh the settings
    c        reset the checksum counters
@@ -1186,12 +1261,15 @@ HELP_TEXT = f"""\
    The device ack and the #get_info read-back (old -> new) are shown, and
    OK is only reported when the read-back matches.
 
- FACTORY RESET (r)
-   Sends #factory_reset: it erases every setting (unit, sensor height, level
-   offset, dead zones, averaging, filter, baud rate).  The dialog asks you to
-   type RESET before anything is sent, and the exchange goes to the probe log.
-   On firmware 2.5.4 the link stayed up afterwards (the manual suggests a
-   power cycle) and the unit came back in mm with sensor_height 0.
+ FACTORY RESET (r) AND REBOOT (b)
+   r sends #factory_reset: it erases every setting (unit, sensor height, level
+   offset, dead zones, averaging, filter, baud rate).  b sends #reset, an
+   undocumented command that reboots the unit and keeps its settings; NMEA
+   stops for about 4-5 s and then resumes.  Both ask "Are you sure?" (y/n)
+   and write the exchange to the probe log.
+   Verified on firmware 2.5.4: the reset link stayed up (the manual suggests a
+   power cycle) and the unit came back in mm with sensor_height 0; #reset kept
+   every setting (iwr_status is a status field and dips to 0 while booting).
 
  FILES (in -d DIR, default data/YYYY-MMDD, one directory per day; all gzipped)
    <stamp>-radar.txt.gz        CSV, one row per measurement frame
@@ -1224,12 +1302,17 @@ def draw_help(stdscr, h, w, offset=0):
     return offset
 
 
-def draw_reset_dialog(stdscr, h, w, dlg):
-    """Modal factory-reset confirmation, in-flight state and result."""
+def draw_confirm_dialog(stdscr, h, w, dlg):
+    """Modal 'are you sure?' / progress / result for reset and reboot."""
+    action = dlg.get("action", "reset")
+    reset = action == "reset"
+    title = " Factory reset " if reset else " Reboot "
+    cmd = FACTORY_RESET if reset else DEVICE_REBOOT
+
     if h < 12 or w < 52:
         stdscr.erase()
         addstr(stdscr, 0, 0,
-               " reset dialog needs at least 52x12 - Esc to cancel "[: w - 1],
+               " dialog needs at least 52x12 - Esc to cancel "[: w - 1],
                COLORS.get("error", curses.A_BOLD))
         stdscr.noutrefresh()
         curses.doupdate()
@@ -1238,7 +1321,7 @@ def draw_reset_dialog(stdscr, h, w, dlg):
     box = box_chars()
     phase = dlg["phase"]
     inner_w = min(max(50, w - 10), 70)
-    box_h = 12 if phase == "confirm" else (8 if phase == "apply" else 10)
+    box_h = 12 if phase == "sure" else (8 if phase == "apply" else 10)
     box_h = min(box_h, h - 2)
     y0 = max(1, (h - box_h) // 2)
     x0 = max(1, (w - inner_w) // 2)
@@ -1253,50 +1336,65 @@ def draw_reset_dialog(stdscr, h, w, dlg):
         addstr(stdscr, y0 + dy, x0 + box_w - 1, box["v"], border)
     addstr(stdscr, y0 + box_h - 1, x0, box["bl"] + box["h"] * (box_w - 2) + box["br"], border)
 
-    addstr(stdscr, y0, x0 + 2, " Factory reset ", COLORS.get("error", curses.A_BOLD))
+    addstr(stdscr, y0, x0 + 2, title,
+           COLORS.get("error" if reset else "warn", curses.A_BOLD))
     iw = box_w - 4
 
-    if phase == "confirm":
+    if phase == "sure":
         warn = COLORS.get("warn", curses.A_BOLD)
-        for i, text in enumerate((
-            "This erases every device setting: unit, sensor height, level",
-            "offset, dead zones, averaging, filter and baud rate.",
-            "A power cycle is recommended afterwards (manual ch. 7.2).",
-        )):
-            addstr(stdscr, y0 + 2 + i, x0 + 2, text[:iw], warn if i == 0 else 0)
-        addstr(stdscr, y0 + 6, x0 + 2, "Type RESET to confirm:"[:iw], curses.A_DIM)
-        addstr(stdscr, y0 + 7, x0 + 2, (dlg.get("typed", "") + "_")[:iw],
-               COLORS.get("primary", curses.A_BOLD))
+        if reset:
+            lines = (
+                "This erases every device setting: unit, sensor height, level",
+                "offset, dead zones, averaging, filter and baud rate.",
+                "The LX-80 comes back in its factory configuration.",
+            )
+        else:
+            lines = (
+                "Sends #reset: the LX-80 restarts and keeps its settings.",
+                "Measurements pause for about 5 seconds, then resume.",
+                "",
+            )
+        for i, text in enumerate(lines):
+            addstr(stdscr, y0 + 2 + i, x0 + 2, text[:iw],
+                   warn if (reset and i == 0) else 0)
+        addstr(stdscr, y0 + 6, x0 + 2, "Are you sure?"[:iw],
+               COLORS.get("error", curses.A_BOLD))
         if dlg.get("error"):
-            addstr(stdscr, y0 + 9, x0 + 2, dlg["error"][:iw],
+            addstr(stdscr, y0 + 7, x0 + 2, dlg["error"][:iw],
                    COLORS.get("error", curses.A_BOLD))
-        addstr(stdscr, y0 + box_h - 2, x0 + 2,
-               " Enter: send   Esc: cancel "[:iw], curses.A_DIM)
+        hint = (" y: reset    n/Esc: cancel " if reset
+                else " y: reboot   n/Esc: cancel ")
+        addstr(stdscr, y0 + box_h - 2, x0 + 2, hint[:iw], curses.A_DIM)
 
     elif phase == "apply":
         dots = "." * (1 + int(time.time() * 2) % 3)
-        addstr(stdscr, y0 + 2, x0 + 2, f"sending #factory_reset{dots}"[:iw],
+        addstr(stdscr, y0 + 2, x0 + 2, f"sending {cmd}{dots}"[:iw],
                COLORS.get("warn", curses.A_BOLD))
-        addstr(stdscr, y0 + 4, x0 + 2, "waiting for the device reply"[:iw],
-               curses.A_DIM)
+        wait = ("waiting for the device reply" if reset
+                else "waiting for the unit to come back")
+        addstr(stdscr, y0 + 4, x0 + 2, wait[:iw], curses.A_DIM)
         addstr(stdscr, y0 + box_h - 2, x0 + 2, " please wait "[:iw], curses.A_DIM)
 
     else:                                   # result
         job = dlg.get("job") or {}
+        addstr(stdscr, y0 + 2, x0 + 2, f"command   : {job.get('cmd', cmd)}"[:iw],
+               curses.A_DIM)
         ack = [ln for ln in (job.get("ack") or []) if "factory_reset" in ln.lower()]
-        ack = ack or (job.get("ack") or [])[:1]
         for k, line in enumerate(ack[:2]):
-            addstr(stdscr, y0 + 2 + k, x0 + 2, f"reply     : {line}"[:iw],
+            addstr(stdscr, y0 + 3 + k, x0 + 2, f"reply     : {line}"[:iw],
                    curses.A_DIM)
         ok = job.get("ok")
-        addstr(stdscr, y0 + 4, x0 + 2,
+        addstr(stdscr, y0 + 5, x0 + 2,
                (" OK  " if ok else " FAILED  ")
                + str(job.get("message", ""))[: iw - 10],
                COLORS.get("primary" if ok else "error", curses.A_BOLD))
-        addstr(stdscr, y0 + 6, x0 + 2,
-               ("Settings are back to factory defaults - press g to review."
-                if ok else
-                "Power-cycle the unit, then press g to check the settings.")[:iw],
+        if reset:
+            note = ("Settings are back to factory defaults - press g to review."
+                    if ok else "Check the unit, then press g to refresh.")
+        else:
+            note = ("Link is back - press g to refresh the settings."
+                    if ok else "Check power and cable, then press g to retry.")
+        addstr(stdscr, y0 + 7, x0 + 2, note[:iw],
                COLORS.get("warn", 0) if ok else curses.A_DIM)
         addstr(stdscr, y0 + box_h - 2, x0 + 2, " Esc: close "[:iw], curses.A_DIM)
 
@@ -1412,11 +1510,12 @@ def draw(stdscr, shared: SharedState, meta, recorder, view):
     raw = view["raw"][: max(0, w - 3)]
     addstr(stdscr, h - 2, 0, f" {raw}"[: w - 1], curses.A_DIM)
 
-    keys = " q quit  p pause log  f freeze  s set  r reset  i settings  g refresh  ? help "
+    keys = (" q quit  p pause log  f freeze  s set  r reset  b reboot"
+            "  i settings  g refresh  ? help ")
     addstr(stdscr, h - 1, 0, keys.ljust(w - 1)[: w - 1], curses.A_REVERSE)
 
-    if view.get("reset"):
-        draw_reset_dialog(stdscr, h, w, view["reset"])
+    if view.get("confirm"):
+        draw_confirm_dialog(stdscr, h, w, view["confirm"])
     elif view.get("dialog"):
         draw_set_dialog(stdscr, h, w, view["dialog"], meta,
                         view.get("info") or {}, (view.get("link") or {}).get("job"))
@@ -1457,35 +1556,35 @@ def run_tui(stdscr, shared: SharedState, meta, recorder, link):
                 break
             continue
 
-        # ---- modal factory-reset dialog ----
-        rst = view.get("reset")
-        if rst is not None:
+        # ---- modal confirmation dialog (factory reset / reboot) ----
+        dlg = view.get("confirm")
+        if dlg is not None:
+            action = dlg.get("action", "reset")
+            want_cmd = FACTORY_RESET if action == "reset" else DEVICE_REBOOT
             job = (view.get("link") or {}).get("job")
-            if (rst["phase"] == "apply" and job and job.get("done")
-                    and job.get("cmd") == FACTORY_RESET):
-                rst["phase"] = "result"
-                rst["job"] = job
+            if (dlg["phase"] == "apply" and job and job.get("done")
+                    and job.get("cmd") == want_cmd):
+                dlg["phase"] = "result"
+                dlg["job"] = job
 
-            if rst["phase"] == "confirm":
-                if ch == 27:
-                    view["reset"] = None
-                elif ch in (curses.KEY_BACKSPACE, 8, 127):
-                    rst["typed"] = rst.get("typed", "")[:-1]
-                elif ch in (10, 13, curses.KEY_ENTER):
-                    if rst.get("typed", "").strip().upper() != "RESET":
-                        rst["error"] = "type RESET to confirm"
-                    elif link is None:
-                        rst["error"] = "TX probe disabled (--no-probe)"
-                    elif link.submit_reset():
-                        rst["phase"] = "apply"
-                        rst["error"] = None
+            if dlg["phase"] == "sure":
+                if ch in (27, ord("n"), ord("N")):
+                    view["confirm"] = None
+                elif ch in (ord("y"), ord("Y")):
+                    if link is None:
+                        dlg["error"] = "TX probe disabled (--no-probe)"
+                    elif action == "reset" and link.submit_reset():
+                        dlg["phase"] = "apply"
+                        dlg["error"] = None
+                    elif action == "reboot" and link.submit_reboot():
+                        dlg["phase"] = "apply"
+                        dlg["error"] = None
                     else:
-                        rst["error"] = "another command is still in progress"
-                elif 32 <= ch < 127 and len(rst.get("typed", "")) < 16:
-                    rst["typed"] = rst.get("typed", "") + chr(ch)
-            elif rst["phase"] == "result":
-                if ch in (27, 10, 13, curses.KEY_ENTER, ord("r"), ord("R")):
-                    view["reset"] = None
+                        dlg["error"] = "another command is still in progress"
+            elif dlg["phase"] == "result":
+                if ch in (27, 10, 13, curses.KEY_ENTER,
+                          ord("y"), ord("Y"), ord("n"), ord("N")):
+                    view["confirm"] = None
 
             if link is not None:
                 view["link"] = link.snapshot()
@@ -1557,7 +1656,10 @@ def run_tui(stdscr, shared: SharedState, meta, recorder, link):
             view["dialog"] = {"phase": "select", "index": 0, "buffer": "", "error": None}
             view["show_info"] = False        # dialogs are drawn over the cards only
         elif ch in (ord("r"), ord("R")):
-            view["reset"] = {"phase": "confirm", "typed": "", "error": None}
+            view["confirm"] = {"action": "reset", "phase": "sure"}
+            view["show_info"] = False
+        elif ch in (ord("b"), ord("B")):
+            view["confirm"] = {"action": "reboot", "phase": "sure"}
             view["show_info"] = False
         elif ch in (ord("i"), ord("I")):
             view["show_info"] = not view["show_info"]
@@ -1655,9 +1757,10 @@ examples:
 tui keys:
   q  quit                    p  pause / resume CSV logging
   f  freeze the display      s  set a device parameter (dialog)
-  r  factory reset           i  device settings panel
-  c  reset the counters      g  refresh settings (#get_info now)
-  ?  key overview and help   Esc close a panel or dialog
+  r  factory reset           b  reboot (settings kept)
+  c  reset the counters      i  device settings panel
+  ?  key overview and help   g  refresh settings (#get_info now)
+  Esc close a panel or dialog
 
   The set dialog (s) is a single "set" command: pick the parameter from the
   dropdown with j/k or the arrow keys, Enter to edit, type the value, Enter
@@ -1713,18 +1816,29 @@ settable parameters (single "set" dialog):
   tested (2.5.4) the device ignores #set_measurement_frequency, so the
   read-back check reports FAILED and the rate stays at 10 Hz.
 
-factory reset (r):
-  Sends #factory_reset (manual ch. 7.2).  It erases every setting - unit,
+factory reset (r) and reboot (b):
+  r sends #factory_reset (manual ch. 7.2); it erases every setting - unit,
   sensor height, level offset, dead zones, averaging, filter type, power
-  save, baud rate.  Nothing is sent until you type RESET at the prompt.
-  There is no read-back to verify, so the dialog only reports the reply; the
-  exchange is written to <stamp>-radar-cmd.log.gz.
+  save, baud rate.  b sends #reset, an undocumented command that restarts
+  the unit and keeps its settings (verified: all 36 #get_info fields
+  unchanged).  Both show an "Are you sure?" popup (y = go, n/Esc = cancel)
+  and write the exchange to <stamp>-radar-cmd.log.gz.
 
-  Verified on 2.5.4 (2026-11-15): the reply was #factory_reset:OK plus a
-  #set_raw=<hex> settings dump, and NMEA and probes continued without a power
-  cycle (the manual asks for one).  #get_info then reported unit_type 0 (mm),
-  sensor_height 0, level_range/deadzone/analog scaled to mm and
+  #reset has no reply; the program waits for the link to come back and then
+  reports the boot time and whether any settings changed (about 4-5 s on the
+  test unit).  #factory_reset replies #factory_reset:OK plus a #set_raw=<hex>
+  dump; there is no read-back to verify, so the dialog only reports the
+  reply.
+
+  Verified on 2.5.4 (2026-11-15): the reset reply was #factory_reset:OK plus
+  a #set_raw=<hex> settings dump, and NMEA and probes continued without a
+  power cycle (the manual asks for one).  #get_info then reported unit_type 0
+  (mm), sensor_height 0, level_range/deadzone/analog scaled to mm and
   wave_analysis_lenght 300 - so set the unit and sensor height again.
+
+  #reset was verified too: no reply, NMEA stops for ~4.3 s (measurements
+  resume on their own), the servicing link answers again after ~3.5 s and all
+  settings are unchanged (only the status field iwr_status reads 0 briefly).
 
 firmware notes (verified on firmware 2.5.4):
   * #set_level_offset shifts the reported distance, so the level moves the
