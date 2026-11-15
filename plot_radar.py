@@ -5,21 +5,23 @@ W. Wright
 github.com/lidar532
 
 
-Plot Geolux LX-80 radar logs (<stamp>-radar.txt) with Bokeh.
+Plot Geolux LX-80 radar logs (<stamp>-radar.txt.gz) with Bokeh.
 
-The logs are the CSV files written by geolux_tui.py:
+The logs are the gzip-compressed CSV files written by geolux_tui.py:
     captured_at,epoch_seconds,actual_distance_m,average_distance_m,snr_db,temperature_c,raw_sentence
 
 Static mode (default) renders a self-contained HTML page:
 
-    ./plot_radar.py                                  # newest *-radar.txt in cwd
-    ./plot_radar.py 2026-1114-122308-radar.txt
-    ./plot_radar.py 2026-1114-122308-radar.txt -o plot.html --no-open
+    ./plot_radar.py                                  # newest *-radar.txt[.gz] under ./data
+    ./plot_radar.py 2026-1114-122308-radar.txt.gz
+    ./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt -o plot.html --no-open
 
 Live mode starts a Bokeh server that tails the log file and refreshes the
 plots while geolux_tui.py keeps appending to it:
 
-    ./plot_radar.py --live 2026-1114-122308-radar.txt --port 5006
+    ./plot_radar.py --live 2026-1114-122308-radar.txt.gz --port 5006
+
+Plain (uncompressed) logs from older runs are read as well.
 
 Requires: pip install bokeh
 """
@@ -30,10 +32,12 @@ import argparse
 import csv
 import datetime as dt
 import glob
+import io
 import os
 import statistics
 import sys
 import webbrowser
+import zlib
 
 from bokeh.io import output_file, save
 from bokeh.resources import INLINE
@@ -54,20 +58,73 @@ TOOLS = "pan,wheel_zoom,box_zoom,undo,redo,reset,save"
 # log file reading
 # --------------------------------------------------------------------------
 DEFAULT_DATA_DIR = "data"
+GZIP_MAGIC = b"\x1f\x8b"
 
 
 def find_latest(*patterns) -> str | None:
     """Newest file matching the first glob pattern that finds anything."""
-    for pattern in patterns or ("*-radar.txt",):
+    for pattern in patterns or ("*-radar.txt*",):
         files = glob.glob(pattern)
         if files:
             return max(files, key=os.path.getmtime)
     return None
 
 
+def is_gzip(path: str) -> bool:
+    """True for a gzip file: by .gz extension or by its magic bytes."""
+    if str(path).lower().endswith(".gz"):
+        return True
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(2) == GZIP_MAGIC
+    except OSError:
+        return False
+
+
+def gunzip_text(data: bytes) -> str:
+    """Decode a gzip stream, tolerating a truncated (still written) tail.
+
+    gzip concatenates members, and an in-progress file ends mid-member, so
+    decompress member by member and keep whatever has been written so far.
+    """
+    parts = []
+    while data:
+        dec = zlib.decompressobj(16 + zlib.MAX_WBITS)      # +16: gzip header
+        try:
+            parts.append(dec.decompress(data))
+        except zlib.error:
+            break
+        if not dec.eof:            # member is incomplete: recorder still running
+            break
+        data = dec.unused_data      # another member appended later
+    return b"".join(parts).decode("utf-8", "replace")
+
+
+def read_text(path: str) -> str:
+    """Read a log file, transparently decompressing gzip."""
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if is_gzip(path):
+        return gunzip_text(data)
+    return data.decode("utf-8", "replace")
+
+
+def open_log(path: str):
+    """Open a CSV log for reading: plain or gzipped, always as text."""
+    if is_gzip(path):
+        return io.StringIO(read_text(path))
+    return open(path, newline="", encoding="utf-8", errors="replace")
+
+
+def default_output(path: str) -> str:
+    """<input>-plot.html, with both .gz and .txt stripped from the name."""
+    base = path[:-3] if path.lower().endswith(".gz") else path
+    return os.path.splitext(base)[0] + "-plot.html"
+
+
 def detect_units(path: str) -> str:
     """Read the distance unit from the CSV header ('actual_distance_m')."""
-    with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+    with open_log(path) as fh:
         header = next(csv.reader(fh), [])
     for name in header:
         if name.startswith("actual_distance_"):
@@ -84,7 +141,7 @@ def _col(fieldnames, prefix):
 
 def column_map(path: str) -> dict:
     """Map our logical names to the actual CSV header names."""
-    with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+    with open_log(path) as fh:
         header = next(csv.reader(fh), [])
     return {
         "dist": _col(header, "actual_distance"),
@@ -134,7 +191,7 @@ def _parse_row(rec, cols):
 
 def load_rows(path: str, max_points: int = 0) -> list[dict]:
     cols = column_map(path)
-    with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+    with open_log(path) as fh:
         rows = []
         for rec in csv.DictReader(fh):
             row = _parse_row(rec, cols)
@@ -147,8 +204,66 @@ def load_rows(path: str, max_points: int = 0) -> list[dict]:
     return rows
 
 
+def _parse_lines(lines, cols):
+    """Parse CSV lines into plot rows (skipping blanks and repeated headers)."""
+    rows = []
+    for rec in csv.reader(lines):
+        if not rec or not rec[0] or rec[0].startswith("captured_at"):
+            continue           # blank line or repeated header
+        row = _parse_row(
+            {
+                "captured_at": rec[0],
+                "epoch_seconds": rec[1] if len(rec) > 1 else "",
+                cols["dist"]: rec[2] if len(rec) > 2 else "",
+                cols["avg"]: rec[3] if len(rec) > 3 else "",
+                cols["snr"]: rec[4] if len(rec) > 4 else "",
+                cols["temp"]: rec[5] if len(rec) > 5 else "",
+            },
+            cols,
+        )
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def _complete_lines(text: str) -> list[str]:
+    """Lines terminated by a newline; drop a half-written last line."""
+    lines = text.splitlines()
+    if lines and not text.endswith(("\n", "\r")):
+        lines.pop()            # last line is still being written
+    return lines
+
+
+def initial_offset(path: str):
+    """Where tailing starts: a byte position, or a line count for gzip."""
+    if is_gzip(path):
+        try:
+            return len(_complete_lines(read_text(path)))
+        except OSError:
+            return 0
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
 def tail_rows(path: str, offset: int, cols: dict):
-    """Read complete new lines from *offset*; return (rows, new_offset)."""
+    """Read complete new lines from *offset*; return (rows, new_offset).
+
+    For a plain log *offset* is a byte position and only the new chunk is read.
+    A gzip stream cannot be tailed by byte position (the old data has to be
+    inflated to reach the new data), so *offset* is the number of complete
+    lines already consumed and the file is decompressed again each call.
+    """
+    if is_gzip(path):
+        try:
+            complete = _complete_lines(read_text(path))
+        except OSError:
+            return [], offset
+        if offset > len(complete):     # file was truncated / replaced
+            offset = 0
+        return _parse_lines(complete[offset:], cols), len(complete)
+
     try:
         size = os.path.getsize(path)
     except OSError:
@@ -167,25 +282,7 @@ def tail_rows(path: str, offset: int, cols: dict):
         return [], offset
     text = chunk[: end + 1].decode("utf-8", "replace")
     new_offset = offset + end + 1
-
-    rows = []
-    for rec in csv.reader(text.splitlines()):
-        if not rec or not rec[0] or rec[0].startswith("captured_at"):
-            continue           # blank line or repeated header
-        row = _parse_row(
-            {
-                "captured_at": rec[0],
-                "epoch_seconds": rec[1] if len(rec) > 1 else "",
-                cols["dist"]: rec[2] if len(rec) > 2 else "",
-                cols["avg"]: rec[3] if len(rec) > 3 else "",
-                cols["snr"]: rec[4] if len(rec) > 4 else "",
-                cols["temp"]: rec[5] if len(rec) > 5 else "",
-            },
-            cols,
-        )
-        if row is not None:
-            rows.append(row)
-    return rows, new_offset
+    return _parse_lines(text.splitlines(), cols), new_offset
 
 
 def to_columns(rows):
@@ -331,7 +428,7 @@ def run_static(args, path):
     subtitle = Div(text=stats_html(path, source.data, units, decimated=decimated),
                    sizing_mode="stretch_width")
 
-    out = args.output or (os.path.splitext(path)[0] + "-plot.html")
+    out = args.output or default_output(path)
     title = f"Geolux LX-80 - {os.path.basename(path)}"
     layout = build_layout(source, units, f"Geolux LX-80 radar \u2014 {os.path.basename(path)}", subtitle)
     if args.inline:                      # embed BokehJS -> works offline
@@ -361,7 +458,7 @@ def run_live(args, path):
             source, units, f"Geolux LX-80 radar \u2014 {os.path.basename(path)} (live)", subtitle
         )
         cols = column_map(path)
-        state = {"offset": os.path.getsize(path)}
+        state = {"offset": initial_offset(path)}
 
         def tick():
             new_rows, state["offset"] = tail_rows(path, state["offset"], cols)
@@ -403,10 +500,13 @@ plot_radar.py [-h | --help | -?] [FILE] [-o OUTPUT] [--live] [--port PORT]
               [--interval SEC] [--no-open] [--inline] [--max-points N]"""
 
 DESCRIPTION_HELP = """\
-Plot Geolux LX-80 radar logs (<stamp>-radar.txt, written by geolux_tui.py)
+Plot Geolux LX-80 radar logs (<stamp>-radar.txt.gz, written by geolux_tui.py)
 with Bokeh.  Three linked panels show distance, SNR and instrument
 temperature against the capture time, with hover tools, zoom/pan tools and a
 summary banner.
+
+The gzip-compressed logs are decompressed on the fly; plain <stamp>-radar.txt
+logs from older runs are read too.
 
 Static mode (default) writes a self-contained HTML page and opens it.  Live
 mode (--live) starts a Bokeh server that tails the log file and refreshes the
@@ -414,8 +514,8 @@ plots while geolux_tui.py keeps appending to it."""
 
 EPILOG_HELP = """\
 examples:
-  ./plot_radar.py                                            newest *-radar.txt under ./data
-  ./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt  plot a specific log
+  ./plot_radar.py                                            newest *-radar.txt[.gz] under ./data
+  ./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt     plot a specific log (.gz too)
   ./plot_radar.py -o /tmp/plot.html --no-open                write HTML, do not open a browser
   ./plot_radar.py --inline                                   embed BokehJS (works offline)
   ./plot_radar.py --live --port 5006                         auto-refreshing Bokeh server
@@ -423,12 +523,14 @@ examples:
   ./plot_radar.py --max-points 20000                         decimate a long log
 
 input files:
-  CSV logs written by geolux_tui.py (default directory ./data/YYYY-MMDD),
-  named <stamp>-radar.txt:
+  gzip-compressed CSV logs written by geolux_tui.py (default directory
+  ./data/YYYY-MMDD), named <stamp>-radar.txt.gz:
     captured_at, epoch_seconds, actual_distance_<unit>, average_distance_<unit>,
     snr_db, temperature_c, raw_sentence
-  The distance unit is taken from the header suffix, so m, ft, mm, cm and in
-  all work.  Missing values (empty cells) are plotted as gaps.
+  Compression is detected from the .gz suffix or the gzip magic bytes, so
+  plain <stamp>-radar.txt logs from older runs are still accepted.  The
+  distance unit is taken from the header suffix, so m, ft, mm, cm and in all
+  work.  Missing values (empty cells) are plotted as gaps.
 
 panels (x axis linked, one shared toolbar):
   distance     actual (L1, solid) and average (L2, dashed); click a legend
@@ -445,7 +547,8 @@ live mode:
   --live serves a Bokeh app that tails FILE and streams newly appended rows
   into the plots, so it can run alongside geolux_tui.py.  Only complete lines
   are parsed (a half-written row is never read), and --max-points caps how
-  many points stay in memory.
+  many points stay in memory.  A gzip log is decompressed again on every
+  refresh, so the live mode stays correct while the recorder appends rows.
 
 install (mamba, not pip):
   mamba env create -f environment.yml    then:  mamba activate radar
@@ -469,7 +572,7 @@ def parse_args(argv=None):
     ap.add_argument("-h", "--help", "-?", action="help",
                     help="show this help and exit")
     ap.add_argument("file", nargs="?", metavar="FILE",
-                    help="log file to plot (default: newest *-radar.txt under "
+                    help="log file to plot (default: newest *-radar.txt[.gz] under "
                          "./data, including its YYYY-MMDD subdirectories, "
                          "falling back to the current directory)")
     ap.add_argument("-o", "--output", metavar="OUTPUT",
@@ -495,12 +598,12 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     path = args.file or find_latest(
-        os.path.join(DEFAULT_DATA_DIR, "*", "*-radar.txt"),   # data/YYYY-MMDD/
-        os.path.join(DEFAULT_DATA_DIR, "*-radar.txt"),       # older flat layout
-        "*-radar.txt",                                       # current directory
+        os.path.join(DEFAULT_DATA_DIR, "*", "*-radar.txt*"),   # data/YYYY-MMDD/
+        os.path.join(DEFAULT_DATA_DIR, "*-radar.txt*"),       # older flat layout
+        "*-radar.txt*",                                       # current directory
     )
     if not path:
-        sys.stderr.write("no *-radar.txt log file found; pass a file name\n")
+        sys.stderr.write("no *-radar.txt[.gz] log file found; pass a file name\n")
         return 2
     if not os.path.exists(path):
         sys.stderr.write(f"file not found: {path}\n")

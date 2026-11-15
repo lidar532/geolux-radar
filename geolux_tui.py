@@ -15,12 +15,12 @@ to #get_info proves *our* TX line -> device RX path.  This program probes
 periodically and keeps a running tally of successful probes.
 
 Every card shows the title above the value.  The actual ("real") distance
-(L1) is logged with the capture time to a CSV file named
+(L1) is logged with the capture time to a gzipped CSV file named
 
-    YYYY-MMDD-HHMMSS-radar.txt
+    YYYY-MMDD-HHMMSS-radar.txt.gz
 
-alongside <stamp>-radar-cmd.log (probe history) and <stamp>-radar-info.txt
-(device settings snapshot).
+alongside <stamp>-radar-cmd.log.gz (probe history) and
+<stamp>-radar-info.txt.gz (device settings snapshot).
 
 Requires pyserial:   pip install pyserial
 Keys:  q quit | p pause logging | f freeze display | s set parameter
@@ -36,6 +36,7 @@ import argparse
 import csv
 import curses
 import datetime as dt
+import gzip
 import locale
 import math
 import os
@@ -283,9 +284,10 @@ def read_info_block(ser, timeout=1.5, quiet=0.25):
 
 
 def write_info_snapshot(path, info):
-    """Write the device settings block to a file (device format)."""
+    """Write the device settings block to a file (device format, gzip if .gz)."""
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(tmp, "wt", encoding="utf-8") as fh:
         fh.write(f"# snapshot:{dt.datetime.now().astimezone().isoformat(timespec='seconds')}\n")
         for key, value in info.items():
             fh.write(f"# {key}:{value}\n")
@@ -373,11 +375,16 @@ class SharedState:
 # CSV logger + probe history
 # --------------------------------------------------------------------------
 class Recorder:
-    """One CSV row per measurement frame: capture time + real distance."""
+    """One CSV row per measurement frame: capture time + real distance.
+
+    The file is gzip-compressed and sync-flushed after every row, so it is
+    complete and readable even if the program is killed, and plot_radar.py
+    can tail it in --live mode.
+    """
 
     def __init__(self, directory: str, units: str, stamp: str):
-        self.path = os.path.join(directory or ".", f"{stamp}-radar.txt")
-        self._fh = open(self.path, "w", newline="", encoding="utf-8")
+        self.path = os.path.join(directory or ".", f"{stamp}-radar.txt.gz")
+        self._fh = gzip.open(self.path, "wt", newline="", encoding="utf-8")
         self._writer = csv.writer(self._fh)
         self._writer.writerow(
             [
@@ -420,11 +427,11 @@ def _cell(value):
 
 
 class CommandLog:
-    """Append-only probe history: sent_at, command, ok, rtt_ms, ..."""
+    """Append-only probe history: sent_at, command, ok, rtt_ms, ... (gzipped)"""
 
     def __init__(self, path: str):
         self.path = path
-        self._fh = open(path, "w", newline="", encoding="utf-8")
+        self._fh = gzip.open(path, "wt", newline="", encoding="utf-8")
         self._writer = csv.writer(self._fh)
         self._writer.writerow(["sent_at", "command", "ok", "rtt_ms", "reply_lines", "error"])
         self._fh.flush()
@@ -1131,10 +1138,10 @@ HELP_TEXT = """\
    The device ack and the #get_info read-back (old -> new) are shown, and
    OK is only reported when the read-back matches.
 
- FILES (in -d DIR, default data/YYYY-MMDD, one directory per day)
-   <stamp>-radar.txt        CSV, one row per measurement frame
-   <stamp>-radar-cmd.log    CSV, one row per command / probe
-   <stamp>-radar-info.txt   device settings snapshot
+ FILES (in -d DIR, default data/YYYY-MMDD, one directory per day; all gzipped)
+   <stamp>-radar.txt.gz        CSV, one row per measurement frame
+   <stamp>-radar-cmd.log.gz    CSV, one row per command / probe
+   <stamp>-radar-info.txt.gz   device settings snapshot
 
    ./geolux_tui.py --help shows all options, examples and firmware notes.
 """
@@ -1477,10 +1484,10 @@ tui keys:
   only reported as OK when the read-back matches.
 
 files (all in --dir, default ./data/YYYY-MMDD - one directory per day - and
-sharing one YYYY-MMDD-HHMMSS stamp):
-  <stamp>-radar.txt       CSV, one row per measurement frame
-  <stamp>-radar-cmd.log   CSV, one row per command/probe
-  <stamp>-radar-info.txt  device settings snapshot (# key:value format)
+sharing one YYYY-MMDD-HHMMSS stamp; every file is gzip-compressed):
+  <stamp>-radar.txt.gz       CSV, one row per measurement frame
+  <stamp>-radar-cmd.log.gz   CSV, one row per command/probe
+  <stamp>-radar-info.txt.gz  device settings snapshot (# key:value format)
 
   CSV columns:
     captured_at, epoch_seconds, actual_distance_<unit>, average_distance_<unit>,
@@ -1497,8 +1504,9 @@ tx probe and link health:
     nothing at all                 -> cable, power, baud rate or SDI-12 sleep
 
   The tally is shown on the main view and in the settings panel, and every
-  probe is written to <stamp>-radar-cmd.log.  The directory is chosen when the
-  program starts: a run that crosses midnight keeps writing to its own date.
+  probe is written to <stamp>-radar-cmd.log.gz.  The directory is chosen when
+  the program starts: a run that crosses midnight keeps writing to its own
+  date.
 
 settable parameters (single "set" dialog):
   Sensor height     #set_sensor_height=<value>      gauge-zero datum
@@ -1635,8 +1643,8 @@ def main(argv=None):
     cmd_log = None
     snapshot_path = None
     if not args.no_log and not args.no_probe:
-        cmd_log = CommandLog(os.path.join(log_dir, f"{stamp}-radar-cmd.log"))
-        snapshot_path = os.path.join(log_dir, f"{stamp}-radar-info.txt")
+        cmd_log = CommandLog(os.path.join(log_dir, f"{stamp}-radar-cmd.log.gz"))
+        snapshot_path = os.path.join(log_dir, f"{stamp}-radar-info.txt.gz")
         if info:
             try:
                 write_info_snapshot(snapshot_path, info)

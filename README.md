@@ -20,7 +20,8 @@ environment.yml     mamba environment (conda-forge)
 requirements.txt    reference only - the supported install is mamba
 README.md           this document
 data/YYYY-MMDD/     recordings, one directory per day (created automatically):
-                    <stamp>-radar.txt, <stamp>-radar-cmd.log, -radar-info.txt
+                    <stamp>-radar.txt.gz, <stamp>-radar-cmd.log.gz,
+                    <stamp>-radar-info.txt.gz  (all gzip-compressed)
 ```
 
 Tested on a real LX-80: **firmware 2.5.4, serial number 102181**, reporting in
@@ -245,7 +246,7 @@ adapter's transmit line reaches the device:
 
 ```
  Geolux LX-80 │ /dev/ttyUSB0 @ 115200 8N1 │ LIVE │ 9.6 Hz │ 37 frames · 0.1s ago
- log: /tmp/radar/2026-1114-151137-radar.txt (37 rows)  ·  TX probe 1/1 ok (100%) · 48 ms
+ log: /tmp/radar/2026-1114-151137-radar.txt.gz (37 rows)  ·  TX probe 1/1 ok (100%) · 48 ms
 ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
 │ Actual distance      │ │ Average distance     │ │ Level                │
 │ 3.58 m               │ │ 3.58 m               │ │ 6.42 m               │
@@ -399,7 +400,7 @@ cd ~/github-projects/geolux-radar && ./geolux_tui.py
 
 ```
  Geolux LX-80 │ /dev/ttyUSB0 @ 115200 8N1 │ LIVE │ 9.6 Hz │ 37 frames · 0.1s ago
- log: data/2026-1114/2026-1114-141157-radar.txt (37 rows)  ·  TX probe 7/7 ok (100%) · 48 ms
+ log: data/2026-1114/2026-1114-141157-radar.txt.gz (37 rows)  ·  TX probe 7/7 ok (100%) · 48 ms
 ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
 │ Actual distance      │ │ Average distance     │ │ Level                │
 │ 3.58 m               │ │ 3.58 m               │ │ 6.42 m               │
@@ -504,7 +505,10 @@ Exit status: `0` normal, `2` port could not be opened / pyserial missing.
 
 ## Files written
 
-All three files share one `YYYY-MMDD-HHMMSS` stamp and are written to `--dir`.
+All three files are **gzip-compressed** (`gzip -dc FILE` to read one, or
+`zcat FILE | less`) and share one `YYYY-MMDD-HHMMSS` stamp.  They are written
+to `--dir`.
+
 The default is **`./data/<YYYY-MMDD>`** — one directory per day, created on
 start-up if it does not exist (e.g. `data/2026-1114` for 14 November 2026).
 The directory is chosen once at start-up, so a run that crosses midnight keeps
@@ -514,12 +518,13 @@ For example a session started on 14 November 2026 at 14:11:57 produces:
 
 | File | Content |
 |---|---|
-| `data/2026-1114/2026-1114-141157-radar.txt` | CSV, one row per measurement frame |
-| `data/2026-1114/2026-1114-141157-radar-cmd.log` | CSV, one row per probe / command |
-| `data/2026-1114/2026-1114-141157-radar-info.txt` | device settings snapshot |
+| `data/2026-1114/2026-1114-141157-radar.txt.gz` | gzipped CSV, one row per measurement frame |
+| `data/2026-1114/2026-1114-141157-radar-cmd.log.gz` | gzipped CSV, one row per probe / command |
+| `data/2026-1114/2026-1114-141157-radar-info.txt.gz` | gzipped device settings snapshot |
 
-### `<stamp>-radar.txt`
+### `<stamp>-radar.txt.gz`
 
+Contents decompressed (the file on disk is gzip):
 ```csv
 captured_at,epoch_seconds,actual_distance_m,average_distance_m,snr_db,temperature_c,raw_sentence
 2026-11-14T14:11:57.639-05:00,1794673917.639,3.576,3.577,47.099,32,"$LVX,3.576,3.577,32,6.423,6.422,47.099,2.449*57"
@@ -532,11 +537,12 @@ captured_at,epoch_seconds,actual_distance_m,average_distance_m,snr_db,temperatur
 * `snr_db`, `temperature_c` — `S1`, `T1`.
 * `raw_sentence` — the original NMEA line, for audit and debugging.
 
-Rows are flushed immediately, so the file is complete if the program is
-killed. Frames rejected by the checksum are **not** written (they are counted
-in the TUI instead).
+Each row is sync-flushed into the gzip stream immediately, so the file is
+complete and decompressible if the program is killed, and
+`plot_radar.py --live` can still read it while it grows. Frames rejected by
+the checksum are **not** written (they are counted in the TUI instead).
 
-### `<stamp>-radar-cmd.log`
+### `<stamp>-radar-cmd.log.gz`
 
 ```csv
 sent_at,command,ok,rtt_ms,reply_lines,error
@@ -548,7 +554,7 @@ sent_at,command,ok,rtt_ms,reply_lines,error
 Every probe and every parameter change, with round-trip time, number of reply
 lines and the error text if it failed.
 
-### `<stamp>-radar-info.txt`
+### `<stamp>-radar-info.txt.gz`
 
 The full `#get_info` reply in the device's own format, rewritten whenever a
 setting changes:
@@ -591,7 +597,7 @@ adapter and the device's RX).
   in the settings panel;
 * after three consecutive failures the header shows `... / TX FAIL` and the
   reason replaces the log line;
-* every attempt is written to `<stamp>-radar-cmd.log`, including the reason
+* every attempt is written to `<stamp>-radar-cmd.log.gz`, including the reason
   (`no reply`, `unparsable reply`, ...).
 
 Reading the combination is the point:
@@ -637,7 +643,7 @@ Details:
   value (see [Firmware quirks](#firmware-quirks-and-gotchas)).
 * Writes run in the link-monitor thread, one command at a time, so the UI
   never blocks and never races the serial reader.
-* Every write is recorded in `<stamp>-radar-cmd.log`.
+* Every write is recorded in `<stamp>-radar-cmd.log.gz`.
 
 Currently exposed (add more by extending the `PARAMS` table in
 `geolux_tui.py`):
@@ -757,9 +763,14 @@ Geolux Instrument Configurator.
 
 ## plot_radar.py — plotting
 
+The input is the gzip-compressed `<stamp>-radar.txt.gz` log; compression is
+detected from the `.gz` suffix or the gzip magic bytes, so plain
+`<stamp>-radar.txt` files from older runs still work.  The output name drops
+both suffixes (`.txt.gz` → `-plot.html`).
+
 ```bash
 ./plot_radar.py                                              # newest under ./data
-./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt    # a specific log
+./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt    # a specific log (.gz too)
 ./plot_radar.py -o plot.html --no-open       # choose the output, no browser
 ./plot_radar.py --inline                     # self-contained HTML (offline)
 ./plot_radar.py --live --port 5006           # auto-refreshing Bokeh server
@@ -768,7 +779,7 @@ Geolux Instrument Configurator.
 | Option | Default | Meaning |
 |---|---|---|
 | `-h`, `--help`, `-?` | | extensive help and exit |
-| `FILE` | newest under `./data` | log file to plot (any `YYYY-MMDD` subdir, falls back to the cwd) |
+| `FILE` | newest under `./data` | log file to plot (plain or `.gz`; any `YYYY-MMDD` subdir, falls back to the cwd) |
 | `-o`, `--output` | `<input>-plot.html` | output HTML (static mode) |
 | `--live` | off | serve an auto-refreshing Bokeh app |
 | `--port` | `5006` | port for `--live` |
@@ -789,9 +800,11 @@ temperature; a banner above the plots summarises samples, duration,
 min/median/max distance, median SNR and average temperature.
 
 Live mode tails the file and streams only complete lines (never a half-written
-row), so it can run while `geolux_tui.py` is still appending. The unit is read
-from the CSV header, so `m`, `ft`, `mm`, `cm` and `in` all work, and empty
-cells are plotted as gaps.
+row), so it can run while `geolux_tui.py` is still appending. A gzip log is
+decompressed again on each refresh (byte offsets do not work through a
+decompressor), which keeps live mode correct while the recorder appends rows.
+The unit is read from the CSV header, so `m`, `ft`, `mm`, `cm` and `in` all
+work, and empty cells are plotted as gaps.
 
 Exit status: `0` success, `2` no log file found.
 
