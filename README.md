@@ -4,7 +4,8 @@
 
 Version **1.3.0** (`version.py`, git tag `v1.3.0`). The version is shown by
 `--version` in both programs, in the TUI header and help overlay, and in the
-title and summary banner of every plot.  The repository URL
+title and summary banner of every plot; see [CHANGELOG.md](CHANGELOG.md) for
+what changed in each release.  The repository URL
 (`https://github.com/lidar532/geolux-radar`, from `version.py`) is displayed at
 the top of the TUI (dim, upper right) and as a clickable link at the top of
 every plot.
@@ -14,7 +15,7 @@ radar level meter connected over RS-232 (USB serial adapter):
 
 | Program | Purpose |
 |---|---|
-| `geolux_tui.py` | Live terminal UI, RS-232 transmit-line probe with success tally, device settings browser, parameter editing and CSV logging |
+| `geolux_tui.py` | Live terminal UI, RS-232 transmit-line probe with success tally, device settings browser, parameter editing, factory reset/reboot and CSV logging |
 | `plot_radar.py` | Bokeh plots of the logged CSV files (static HTML or auto-refreshing live server) |
 | `environment.yml` | mamba environment (conda-forge) with `pyserial` and `bokeh` |
 
@@ -24,6 +25,7 @@ Repository layout:
 geolux_tui.py        live TUI, TX probe, settings, parameter editing, CSV logging
 plot_radar.py       Bokeh plots (static HTML or live server) of the CSV logs
 version.py          project version, single source of truth
+CHANGELOG.md        release notes (1.0.0 -> 1.3.0)
 environment.yml     mamba environment (conda-forge)
 requirements.txt    reference only - the supported install is mamba
 README.md           this document

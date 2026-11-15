@@ -24,7 +24,7 @@ alongside <stamp>-radar-cmd.log.gz (probe history) and
 
 Requires pyserial:   pip install pyserial
 Keys:  q quit | p pause logging | f freeze display | s set parameter
-       r factory reset | i device settings | g refresh settings
+       r factory reset | b reboot | i device settings | g refresh settings
        c reset counters | ? help
 
 Port is opened 115200 8N1 with echo disabled (termios ECHO cleared) and all
