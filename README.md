@@ -19,8 +19,8 @@ plot_radar.py       Bokeh plots (static HTML or live server) of the CSV logs
 environment.yml     mamba environment (conda-forge)
 requirements.txt    reference only - the supported install is mamba
 README.md           this document
-data/               recordings (created automatically; <stamp>-radar.txt,
-                    <stamp>-radar-cmd.log, <stamp>-radar-info.txt)
+data/YYYY-MMDD/     recordings, one directory per day (created automatically):
+                    <stamp>-radar.txt, <stamp>-radar-cmd.log, -radar-info.txt
 ```
 
 Tested on a real LX-80: **firmware 2.5.4, serial number 102181**, reporting in
@@ -124,10 +124,10 @@ Both programs print extensive help with `--help`, `-h` or `-?`.
 
 ```bash
 mamba activate radar
-./geolux_tui.py                                   # live TUI, logs to ./data
+./geolux_tui.py                                   # live TUI, logs to ./data/<date>
 ./geolux_tui.py -d ~/radar-logs                   # logs go elsewhere
 ./geolux_tui.py --no-tui --duration 60            # one minute, plain text
-./plot_radar.py                                  # plot the newest file in ./data
+./plot_radar.py                                  # plot the newest file under ./data
 ./plot_radar.py --live --no-open                 # live plot on :5006
 ```
 
@@ -398,7 +398,7 @@ cd ~/github-projects/geolux-radar && ./geolux_tui.py
 
 ```
  Geolux LX-80 │ /dev/ttyUSB0 @ 115200 8N1 │ LIVE │ 9.6 Hz │ 37 frames · 0.1s ago
- log: data/2026-1114-141157-radar.txt (37 rows)  ·  TX probe 7/7 ok (100%) · 48 ms
+ log: data/2026-1114/2026-1114-141157-radar.txt (37 rows)  ·  TX probe 7/7 ok (100%) · 48 ms
 ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
 │ Actual distance      │ │ Average distance     │ │ Level                │
 │ 3.58 m               │ │ 3.58 m               │ │ 6.42 m               │
@@ -470,7 +470,7 @@ geolux_tui.py [-h | --help | -?] [-p PORT] [-b BAUD] [--units UNIT] [-d DIR]
 | `-p`, `--port` | `/dev/ttyUSB0` | serial device |
 | `-b`, `--baud` | `115200` | RS-232 baud rate (always 8N1) |
 | `--units` | from device | unit label: `mm`, `cm`, `m`, `in`, `ft` |
-| `-d`, `--dir` | `data` | directory for the log files, created if missing |
+| `-d`, `--dir` | `data/<YYYY-MMDD>` | directory for the log files, created if missing (e.g. `data/2026-1114`) |
 | `--no-log` | off | write nothing to disk |
 | `--no-tui` | off | plain text output (one line per frame + probe results) |
 | `--no-probe` | off | never write to the device (disables probing, settings and the set dialog) |
@@ -481,7 +481,7 @@ geolux_tui.py [-h | --help | -?] [-p PORT] [-b BAUD] [--units UNIT] [-d DIR]
 Examples:
 
 ```bash
-./geolux_tui.py                        # TUI + logging in the current directory
+./geolux_tui.py                        # TUI + logging in ./data/YYYY-MMDD
 ./geolux_tui.py -p /dev/ttyUSB1        # another port
 ./geolux_tui.py --no-tui               # usable over ssh or piped to a file
 ./geolux_tui.py --no-probe             # strictly read-only
@@ -495,17 +495,19 @@ Exit status: `0` normal, `2` port could not be opened / pyserial missing.
 
 ## Files written
 
-All three files share one `YYYY-MMDD-HHMMSS` stamp and are written to `--dir`,
-which defaults to **`./data`** and is created on start-up if it does not exist.
-Give `-d` to put them somewhere else (e.g. `-d ~/radar-logs`, or `-d .` to get
-the old behaviour).
+All three files share one `YYYY-MMDD-HHMMSS` stamp and are written to `--dir`.
+The default is **`./data/<YYYY-MMDD>`** — one directory per day, created on
+start-up if it does not exist (e.g. `data/2026-1114` for 14 November 2026).
+The directory is chosen once at start-up, so a run that crosses midnight keeps
+writing to the directory it began in.  Give `-d` to write somewhere else
+(`-d ~/radar-logs`, `-d /mnt/d/radar`, or `-d .` for the current directory).
 For example a session started on 14 November 2026 at 14:11:57 produces:
 
 | File | Content |
 |---|---|
-| `data/2026-1114-141157-radar.txt` | CSV, one row per measurement frame |
-| `data/2026-1114-141157-radar-cmd.log` | CSV, one row per probe / command |
-| `data/2026-1114-141157-radar-info.txt` | device settings snapshot |
+| `data/2026-1114/2026-1114-141157-radar.txt` | CSV, one row per measurement frame |
+| `data/2026-1114/2026-1114-141157-radar-cmd.log` | CSV, one row per probe / command |
+| `data/2026-1114/2026-1114-141157-radar-info.txt` | device settings snapshot |
 
 ### `<stamp>-radar.txt`
 
@@ -727,8 +729,8 @@ Geolux Instrument Configurator.
 ## plot_radar.py — plotting
 
 ```bash
-./plot_radar.py                                    # newest *-radar.txt in ./data
-./plot_radar.py data/2026-1114-122308-radar.txt    # a specific log
+./plot_radar.py                                              # newest under ./data
+./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt    # a specific log
 ./plot_radar.py -o plot.html --no-open       # choose the output, no browser
 ./plot_radar.py --inline                     # self-contained HTML (offline)
 ./plot_radar.py --live --port 5006           # auto-refreshing Bokeh server
@@ -737,7 +739,7 @@ Geolux Instrument Configurator.
 | Option | Default | Meaning |
 |---|---|---|
 | `-h`, `--help`, `-?` | | extensive help and exit |
-| `FILE` | newest in `./data` | log file to plot (falls back to the cwd) |
+| `FILE` | newest under `./data` | log file to plot (any `YYYY-MMDD` subdir, falls back to the cwd) |
 | `-o`, `--output` | `<input>-plot.html` | output HTML (static mode) |
 | `--live` | off | serve an auto-refreshing Bokeh app |
 | `--port` | `5006` | port for `--live` |

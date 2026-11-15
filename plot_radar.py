@@ -51,10 +51,10 @@ TOOLS = "pan,wheel_zoom,box_zoom,undo,redo,reset,save"
 DEFAULT_DATA_DIR = "data"
 
 
-def find_latest(*directories) -> str | None:
-    """Newest *-radar.txt in the first directory that has any."""
-    for directory in directories or (".",):
-        files = glob.glob(os.path.join(directory or ".", "*-radar.txt"))
+def find_latest(*patterns) -> str | None:
+    """Newest file matching the first glob pattern that finds anything."""
+    for pattern in patterns or ("*-radar.txt",):
+        files = glob.glob(pattern)
         if files:
             return max(files, key=os.path.getmtime)
     return None
@@ -409,16 +409,16 @@ plots while geolux_tui.py keeps appending to it."""
 
 EPILOG_HELP = """\
 examples:
-  ./plot_radar.py                                  newest *-radar.txt in ./data
-  ./plot_radar.py data/2026-1114-122308-radar.txt  plot a specific log
-  ./plot_radar.py -o /tmp/plot.html --no-open      write HTML, do not open a browser
-  ./plot_radar.py --inline                         embed BokehJS (works offline)
-  ./plot_radar.py --live --port 5006               auto-refreshing Bokeh server
-  ./plot_radar.py --live --interval 0.5            refresh twice per second
-  ./plot_radar.py --max-points 20000               decimate a long log
+  ./plot_radar.py                                            newest *-radar.txt under ./data
+  ./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt  plot a specific log
+  ./plot_radar.py -o /tmp/plot.html --no-open                write HTML, do not open a browser
+  ./plot_radar.py --inline                                   embed BokehJS (works offline)
+  ./plot_radar.py --live --port 5006                         auto-refreshing Bokeh server
+  ./plot_radar.py --live --interval 0.5                      refresh twice per second
+  ./plot_radar.py --max-points 20000                         decimate a long log
 
 input files:
-  CSV logs written by geolux_tui.py (default directory ./data),
+  CSV logs written by geolux_tui.py (default directory ./data/YYYY-MMDD),
   named <stamp>-radar.txt:
     captured_at, epoch_seconds, actual_distance_<unit>, average_distance_<unit>,
     snr_db, temperature_c, raw_sentence
@@ -464,7 +464,8 @@ def parse_args(argv=None):
     ap.add_argument("-h", "--help", "-?", action="help",
                     help="show this help and exit")
     ap.add_argument("file", nargs="?", metavar="FILE",
-                    help="log file to plot (default: newest *-radar.txt in ./data, "
+                    help="log file to plot (default: newest *-radar.txt under "
+                         "./data, including its YYYY-MMDD subdirectories, "
                          "falling back to the current directory)")
     ap.add_argument("-o", "--output", metavar="OUTPUT",
                     help="output HTML file for static mode "
@@ -488,7 +489,11 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    path = args.file or find_latest(DEFAULT_DATA_DIR, ".")
+    path = args.file or find_latest(
+        os.path.join(DEFAULT_DATA_DIR, "*", "*-radar.txt"),   # data/YYYY-MMDD/
+        os.path.join(DEFAULT_DATA_DIR, "*-radar.txt"),       # older flat layout
+        "*-radar.txt",                                       # current directory
+    )
     if not path:
         sys.stderr.write("no *-radar.txt log file found; pass a file name\n")
         return 2

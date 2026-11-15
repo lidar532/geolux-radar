@@ -58,7 +58,14 @@ except ImportError:  # pragma: no cover - non-POSIX
 
 DEFAULT_PORT = "/dev/ttyUSB0"
 DEFAULT_BAUD = 115200
-DEFAULT_LOG_DIR = "data"   # created on start-up if missing
+DATA_ROOT = "data"           # recordings go to <DATA_ROOT>/<YYYY-MMDD>
+DATE_DIR_FORMAT = "%Y-%m%d"  # 2026-1114 - year, month+day without separator
+
+
+def default_log_dir(now=None) -> str:
+    """Default log directory for today: data/YYYY-MMDD (created if missing)."""
+    now = now or dt.datetime.now()
+    return os.path.join(DATA_ROOT, now.strftime(DATE_DIR_FORMAT))
 GET_INFO = "#get_info"
 CMD_TERMINATOR = "\r\n"
 
@@ -1354,7 +1361,8 @@ tui keys:
   back; the device ack and the old -> new values are shown, and a change is
   only reported as OK when the read-back matches.
 
-files (all in --dir, default ./data, sharing one YYYY-MMDD-HHMMSS stamp):
+files (all in --dir, default ./data/YYYY-MMDD - one directory per day - and
+sharing one YYYY-MMDD-HHMMSS stamp):
   <stamp>-radar.txt       CSV, one row per measurement frame
   <stamp>-radar-cmd.log   CSV, one row per command/probe
   <stamp>-radar-info.txt  device settings snapshot (# key:value format)
@@ -1374,7 +1382,8 @@ tx probe and link health:
     nothing at all                 -> cable, power, baud rate or SDI-12 sleep
 
   The tally is shown on the main view and in the settings panel, and every
-  probe is written to <stamp>-radar-cmd.log.
+  probe is written to <stamp>-radar-cmd.log.  The directory is chosen when the
+  program starts: a run that crosses midnight keeps writing to its own date.
 
 settable parameters (single "set" dialog):
   Sensor height     #set_sensor_height=<value>   height above the gauge zero
@@ -1446,9 +1455,9 @@ def parse_args(argv=None):
                     metavar="UNIT",
                     help="unit label for distances/levels; default is read from "
                          "#get_info unit_type (0=mm 1=cm 2=m 3=in 4=ft)")
-    ap.add_argument("-d", "--dir", default=DEFAULT_LOG_DIR, metavar="DIR",
+    ap.add_argument("-d", "--dir", default=default_log_dir(), metavar="DIR",
                     help="directory for the log files, created if missing "
-                         "(default: %(default)s)")
+                         "(default: data/<YYYY-MMDD>, i.e. %(default)s)")
     ap.add_argument("--no-log", action="store_true",
                     help="do not create any log file (nothing is written to disk)")
     ap.add_argument("--no-tui", action="store_true",
