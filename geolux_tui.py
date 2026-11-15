@@ -45,7 +45,7 @@ import sys
 import threading
 import time
 
-from version import VERSION
+from version import REPO_URL, VERSION
 
 try:
     import serial
@@ -1114,6 +1114,7 @@ def draw_set_dialog(stdscr, h, w, dlg, meta, info, link_job):
 
 HELP_TEXT = f"""\
  Geolux LX-80 radar level meter - live TUI (geolux-radar {VERSION})
+ {REPO_URL}
 
  WHAT IT DOES
    Reads the $LVX / $ANG NMEA stream from the LX-80 over RS-232 and shows
@@ -1223,6 +1224,11 @@ def draw(stdscr, shared: SharedState, meta, recorder, view):
     )
     addstr(stdscr, 0, 0, head.ljust(w - 1)[: w - 1],
            curses.A_REVERSE | (COLORS.get("error", 0) if link_stats.get("fail_streak", 0) >= 3 else 0))
+
+    # ---- project link, top right under the header -------------------
+    repo = REPO_URL.split("://", 1)[-1]
+    if w > len(repo) + 6:
+        addstr(stdscr, 2, w - len(repo) - 1, repo, curses.A_DIM)
 
     # ---- log file + TX probe tally ----------------------------------
     if snap["error"]:
@@ -1462,7 +1468,7 @@ the title above each value and logged to CSV.  The servicing protocol
 (host -> device, manual ch. 7.2) is used for the TX probe and for changing
 device parameters."""
 
-EPILOG_HELP = """\
+EPILOG_HELP = f"""\
 examples:
   ./geolux_tui.py                        live TUI on /dev/ttyUSB0 at 115200
   ./geolux_tui.py -p /dev/ttyUSB1        use another serial port
@@ -1562,6 +1568,7 @@ install (mamba, not pip):
 see also:
   README.md                full documentation
   plot_radar.py --help     plot the logged CSV files with Bokeh
+  {REPO_URL}
 
 exit status:
   0  normal exit (q, --duration reached, Ctrl-C)

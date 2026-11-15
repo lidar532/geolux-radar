@@ -39,7 +39,7 @@ import sys
 import webbrowser
 import zlib
 
-from version import VERSION
+from version import REPO_URL, VERSION
 
 from bokeh.io import output_file, save
 from bokeh.resources import INLINE
@@ -517,7 +517,18 @@ def build_layout(source, units, title, subtitle):
         merge_tools=False,
         sizing_mode="stretch_width",
     )
-    return column(subtitle, grid, sizing_mode="stretch_width")
+    header = Div(
+        text=(
+            '<div style="font:12px system-ui,sans-serif;color:#666;'
+            'padding:4px 2px 0">'
+            f'<a href="{REPO_URL}" style="color:#1f77b4;text-decoration:none">'
+            f'{REPO_URL}</a>'
+            '<span style="color:#ccc"> &nbsp;\u00b7&nbsp; </span>'
+            f'geolux-radar {VERSION}</div>'
+        ),
+        sizing_mode="stretch_width",
+    )
+    return column(header, subtitle, grid, sizing_mode="stretch_width")
 
 
 # --------------------------------------------------------------------------
@@ -628,7 +639,7 @@ Static mode (default) writes a self-contained HTML page and opens it.  Live
 mode (--live) starts a Bokeh server that tails the log file and refreshes the
 plots while geolux_tui.py keeps appending to it."""
 
-EPILOG_HELP = """\
+EPILOG_HELP = f"""\
 examples:
   ./plot_radar.py                                            newest *-radar.txt[.gz] under ./data
   ./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt     plot a specific log (.gz too)
@@ -692,6 +703,9 @@ install (mamba, not pip):
 exit status:
   0  success
   2  no log file found, or the given file does not exist
+
+repository:
+  {REPO_URL}
 """
 
 

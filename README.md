@@ -2,9 +2,12 @@
 
 2026-1014 W. Wright github.com/lidar532
 
-Version **1.0.1** (`version.py`, git tag `v1.0.1`). The version is shown by
+Version **1.1.0** (`version.py`, git tag `v1.1.0`). The version is shown by
 `--version` in both programs, in the TUI header and help overlay, and in the
-title and summary banner of every plot.
+title and summary banner of every plot.  The repository URL
+(`https://github.com/lidar532/geolux-radar`, from `version.py`) is displayed at
+the top of the TUI (dim, upper right) and as a clickable link at the top of
+every plot.
 
 Two Python programs for a [Geolux LX-80](https://www.geolux.hr/) non-contact
 radar level meter connected over RS-232 (USB serial adapter):
