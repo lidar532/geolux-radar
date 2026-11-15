@@ -58,6 +58,7 @@ except ImportError:  # pragma: no cover - non-POSIX
 
 DEFAULT_PORT = "/dev/ttyUSB0"
 DEFAULT_BAUD = 115200
+DEFAULT_LOG_DIR = "data"   # created on start-up if missing
 GET_INFO = "#get_info"
 CMD_TERMINATOR = "\r\n"
 
@@ -175,6 +176,20 @@ def parse_info(lines) -> dict:
 def decode_line(raw: bytes) -> str:
     """Decode a serial line and remove CR characters (and surrounding space)."""
     return raw.decode("ascii", "replace").replace("\r", "").strip()
+
+
+# --------------------------------------------------------------------------
+# logging directory
+# --------------------------------------------------------------------------
+def ensure_dir(path: str) -> str:
+    """Create the log directory (default ./data) if it does not exist."""
+    path = path or "."
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError as exc:
+        sys.stderr.write(f"cannot create log directory {path}: {exc}; using .\n")
+        return "."
+    return path
 
 
 # --------------------------------------------------------------------------
@@ -338,7 +353,6 @@ class Recorder:
     """One CSV row per measurement frame: capture time + real distance."""
 
     def __init__(self, directory: str, units: str, stamp: str):
-        os.makedirs(directory or ".", exist_ok=True)
         self.path = os.path.join(directory or ".", f"{stamp}-radar.txt")
         self._fh = open(self.path, "w", newline="", encoding="utf-8")
         self._writer = csv.writer(self._fh)
@@ -1340,7 +1354,7 @@ tui keys:
   back; the device ack and the old -> new values are shown, and a change is
   only reported as OK when the read-back matches.
 
-files (all in --dir, sharing one YYYY-MMDD-HHMMSS stamp):
+files (all in --dir, default ./data, sharing one YYYY-MMDD-HHMMSS stamp):
   <stamp>-radar.txt       CSV, one row per measurement frame
   <stamp>-radar-cmd.log   CSV, one row per command/probe
   <stamp>-radar-info.txt  device settings snapshot (# key:value format)
@@ -1432,8 +1446,9 @@ def parse_args(argv=None):
                     metavar="UNIT",
                     help="unit label for distances/levels; default is read from "
                          "#get_info unit_type (0=mm 1=cm 2=m 3=in 4=ft)")
-    ap.add_argument("-d", "--dir", default=".", metavar="DIR",
-                    help="directory for the log files (default: current directory)")
+    ap.add_argument("-d", "--dir", default=DEFAULT_LOG_DIR, metavar="DIR",
+                    help="directory for the log files, created if missing "
+                         "(default: %(default)s)")
     ap.add_argument("--no-log", action="store_true",
                     help="do not create any log file (nothing is written to disk)")
     ap.add_argument("--no-tui", action="store_true",
@@ -1483,13 +1498,14 @@ def main(argv=None):
     units = args.units or UNIT_NAMES.get(_int(info.get("unit_type")), "m")
 
     shared = SharedState()
+    log_dir = ensure_dir(args.dir)
     stamp = dt.datetime.now().strftime("%Y-%m%d-%H%M%S")  # YYYY-MMDD-HHMMSS
-    recorder = None if args.no_log else Recorder(args.dir, units, stamp)
+    recorder = None if args.no_log else Recorder(log_dir, units, stamp)
     cmd_log = None
     snapshot_path = None
     if not args.no_log and not args.no_probe:
-        cmd_log = CommandLog(os.path.join(args.dir or ".", f"{stamp}-radar-cmd.log"))
-        snapshot_path = os.path.join(args.dir or ".", f"{stamp}-radar-info.txt")
+        cmd_log = CommandLog(os.path.join(log_dir, f"{stamp}-radar-cmd.log"))
+        snapshot_path = os.path.join(log_dir, f"{stamp}-radar-info.txt")
         if info:
             try:
                 write_info_snapshot(snapshot_path, info)

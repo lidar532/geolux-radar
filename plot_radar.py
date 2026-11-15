@@ -48,11 +48,16 @@ TOOLS = "pan,wheel_zoom,box_zoom,undo,redo,reset,save"
 # --------------------------------------------------------------------------
 # log file reading
 # --------------------------------------------------------------------------
-def find_latest(directory: str = ".") -> str | None:
-    files = glob.glob(os.path.join(directory or ".", "*-radar.txt"))
-    if not files:
-        return None
-    return max(files, key=os.path.getmtime)
+DEFAULT_DATA_DIR = "data"
+
+
+def find_latest(*directories) -> str | None:
+    """Newest *-radar.txt in the first directory that has any."""
+    for directory in directories or (".",):
+        files = glob.glob(os.path.join(directory or ".", "*-radar.txt"))
+        if files:
+            return max(files, key=os.path.getmtime)
+    return None
 
 
 def detect_units(path: str) -> str:
@@ -404,16 +409,17 @@ plots while geolux_tui.py keeps appending to it."""
 
 EPILOG_HELP = """\
 examples:
-  ./plot_radar.py                             newest *-radar.txt in the cwd
-  ./plot_radar.py 2026-1114-122308-radar.txt  plot a specific log
-  ./plot_radar.py -o /tmp/plot.html --no-open write HTML, do not open a browser
-  ./plot_radar.py --inline                    embed BokehJS (works offline)
-  ./plot_radar.py --live --port 5006          auto-refreshing Bokeh server
-  ./plot_radar.py --live --interval 0.5       refresh twice per second
-  ./plot_radar.py --max-points 20000          decimate a long log
+  ./plot_radar.py                                  newest *-radar.txt in ./data
+  ./plot_radar.py data/2026-1114-122308-radar.txt  plot a specific log
+  ./plot_radar.py -o /tmp/plot.html --no-open      write HTML, do not open a browser
+  ./plot_radar.py --inline                         embed BokehJS (works offline)
+  ./plot_radar.py --live --port 5006               auto-refreshing Bokeh server
+  ./plot_radar.py --live --interval 0.5            refresh twice per second
+  ./plot_radar.py --max-points 20000               decimate a long log
 
 input files:
-  CSV logs written by geolux_tui.py, named <stamp>-radar.txt:
+  CSV logs written by geolux_tui.py (default directory ./data),
+  named <stamp>-radar.txt:
     captured_at, epoch_seconds, actual_distance_<unit>, average_distance_<unit>,
     snr_db, temperature_c, raw_sentence
   The distance unit is taken from the header suffix, so m, ft, mm, cm and in
@@ -458,8 +464,8 @@ def parse_args(argv=None):
     ap.add_argument("-h", "--help", "-?", action="help",
                     help="show this help and exit")
     ap.add_argument("file", nargs="?", metavar="FILE",
-                    help="log file to plot (default: newest *-radar.txt in the "
-                         "current directory)")
+                    help="log file to plot (default: newest *-radar.txt in ./data, "
+                         "falling back to the current directory)")
     ap.add_argument("-o", "--output", metavar="OUTPUT",
                     help="output HTML file for static mode "
                          "(default: <input>-plot.html)")
@@ -482,7 +488,7 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    path = args.file or find_latest()
+    path = args.file or find_latest(DEFAULT_DATA_DIR, ".")
     if not path:
         sys.stderr.write("no *-radar.txt log file found; pass a file name\n")
         return 2
