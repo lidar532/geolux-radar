@@ -2,6 +2,10 @@
 
 2026-1014 W. Wright github.com/lidar532
 
+Version **1.0.0** (`version.py`, git tag `v1.0.0`). The version is shown by
+`--version` in both programs, in the TUI header and help overlay, and in the
+title and summary banner of every plot.
+
 Two Python programs for a [Geolux LX-80](https://www.geolux.hr/) non-contact
 radar level meter connected over RS-232 (USB serial adapter):
 
@@ -16,6 +20,7 @@ Repository layout:
 ```
 geolux_tui.py        live TUI, TX probe, settings, parameter editing, CSV logging
 plot_radar.py       Bokeh plots (static HTML or live server) of the CSV logs
+version.py          project version, single source of truth
 environment.yml     mamba environment (conda-forge)
 requirements.txt    reference only - the supported install is mamba
 README.md           this document
@@ -469,14 +474,15 @@ line help. It scrolls with `j`/`k` or PgUp/PgDn and closes with `?`, `h` or
 ### Command line options
 
 ```
-geolux_tui.py [-h | --help | -?] [-p PORT] [-b BAUD] [--units UNIT] [-d DIR]
-               [--no-log] [--no-tui] [--no-probe] [--probe-interval SEC]
-               [--probe-timeout SEC] [--duration SEC]
+geolux_tui.py [-h | --help | -? | --version] [-p PORT] [-b BAUD]
+               [--units UNIT] [-d DIR] [--no-log] [--no-tui] [--no-probe]
+               [--probe-interval SEC] [--probe-timeout SEC] [--duration SEC]
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
 | `-h`, `--help`, `-?` | | extensive help and exit |
+| `--version` | | print the version and exit |
 | `-p`, `--port` | `/dev/ttyUSB0` | serial device |
 | `-b`, `--baud` | `115200` | RS-232 baud rate (always 8N1) |
 | `--units` | from device | unit label: `mm`, `cm`, `m`, `in`, `ft` |
@@ -768,9 +774,15 @@ detected from the `.gz` suffix or the gzip magic bytes, so plain
 `<stamp>-radar.txt` files from older runs still work.  The output name drops
 both suffixes (`.txt.gz` → `-plot.html`).
 
+Give a **directory** instead of a file (`./plot_radar.py data/2026-1115/`) and
+every `*-radar.txt[.gz]` below it is listed newest first with size and
+timestamp; type a number to plot it, `Enter` for the newest, `q` to quit.
+On a pipe or with `</dev/null` the newest log is used automatically.
+
 ```bash
 ./plot_radar.py                                              # newest under ./data
 ./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt    # a specific log (.gz too)
+./plot_radar.py data/2026-1115/              # list that directory's logs and pick one
 ./plot_radar.py -o plot.html --no-open       # choose the output, no browser
 ./plot_radar.py --inline                     # self-contained HTML (offline)
 ./plot_radar.py --live --port 5006           # auto-refreshing Bokeh server
@@ -779,7 +791,8 @@ both suffixes (`.txt.gz` → `-plot.html`).
 | Option | Default | Meaning |
 |---|---|---|
 | `-h`, `--help`, `-?` | | extensive help and exit |
-| `FILE` | newest under `./data` | log file to plot (plain or `.gz`; any `YYYY-MMDD` subdir, falls back to the cwd) |
+| `--version` | | print the version and exit |
+| `FILE` | newest under `./data` | log file, or a directory to pick a log from (plain or `.gz`; any `YYYY-MMDD` subdir, falls back to the cwd) |
 | `-o`, `--output` | `<input>-plot.html` | output HTML (static mode) |
 | `--live` | off | serve an auto-refreshing Bokeh app |
 | `--port` | `5006` | port for `--live` |
@@ -791,21 +804,25 @@ both suffixes (`.txt.gz` → `-plot.html`).
 Panels (x axis linked, toolbar above the distance panel):
 
 1. **Distance** — actual `L1` (solid, circles) and average `L2` (dashed,
-   crosses); click a legend entry to hide or show that element.
-2. **SNR** — dB, with a dashed 10 dB low-echo reference line; legend entry
-   `SNR` toggles it.
-3. **Temperature** — instrument °C; legend entry `Temperature` toggles it.
+   crosses); legend entries `L1 line`, `L1 points`, `L2 line`, `L2 points`.
+2. **SNR** — dB, with a dashed 10 dB low-echo reference line; legend entries
+   `SNR line` and `SNR points`.
+3. **Temperature** — instrument °C; legend entries `Temp line` and
+   `Temp points`.
 
 Every series is a line plus markers (5–6 px, alpha 0.85) so individual
 samples stay visible when zoomed in. **Mouse-wheel zoom is active by
 default** on all three panels — scroll to zoom, drag to pan, without
 selecting a tool first; box zoom, undo/redo, reset and save are in the
-toolbar. Each panel has its own legend and the click policy is *hide*, so any
-element can be switched off without re-plotting.
+toolbar. Each panel has its own legend and the click policy is *hide*; the
+line and the markers of a series have **separate** legend entries, so points
+and lines can be enabled/disabled independently on every panel without
+re-plotting.
 
 A vertical-line hover tool on each panel shows time, distance, SNR and
 temperature; a banner above the plots summarises samples, duration,
-min/median/max distance, median SNR and average temperature.
+min/median/max distance, median SNR and average temperature, and carries the
+program version.
 
 Live mode tails the file and streams only complete lines (never a half-written
 row), so it can run while `geolux_tui.py` is still appending. A gzip log is

@@ -45,6 +45,8 @@ import sys
 import threading
 import time
 
+from version import VERSION
+
 try:
     import serial
 except ImportError:  # pragma: no cover
@@ -1110,8 +1112,8 @@ def draw_set_dialog(stdscr, h, w, dlg, meta, info, link_job):
                (" Esc: close " if phase == "result" else " please wait ")[:iw], curses.A_DIM)
 
 
-HELP_TEXT = """\
- Geolux LX-80 radar level meter - live TUI
+HELP_TEXT = f"""\
+ Geolux LX-80 radar level meter - live TUI (geolux-radar {VERSION})
 
  WHAT IT DOES
    Reads the $LVX / $ANG NMEA stream from the LX-80 over RS-232 and shows
@@ -1215,7 +1217,7 @@ def draw(stdscr, shared: SharedState, meta, recorder, view):
         status += " / TX FAIL"
     age = "" if snap["last_rx"] is None else f" \u00b7 {time.time() - snap['last_rx']:.1f}s ago"
     head = (
-        f" Geolux LX-80 {box['v']} {meta['port']} @ {meta['baud']} 8N1 "
+        f" Geolux LX-80 v{VERSION} {box['v']} {meta['port']} @ {meta['baud']} 8N1 "
         f"{box['v']} {status} {box['v']} {fmt_rate(snap['count'], elapsed)}"
         f" {box['v']} {snap['count']} frames{age} "
     )
@@ -1445,14 +1447,15 @@ def run_headless(shared: SharedState, meta, recorder, link):
 # main
 # --------------------------------------------------------------------------
 USAGE_HELP = """\
-geolux_tui.py [-h | --help | -?] [-p PORT] [-b BAUD] [--units UNIT] [-d DIR]
-               [--no-log] [--no-tui] [--no-probe] [--probe-interval SEC]
-               [--probe-timeout SEC] [--duration SEC]"""
+geolux_tui.py [-h | --help | -? | --version] [-p PORT] [-b BAUD]
+                     [--units UNIT] [-d DIR] [--no-log] [--no-tui]
+                     [--no-probe] [--probe-interval SEC]
+                     [--probe-timeout SEC] [--duration SEC]"""
 
-DESCRIPTION_HELP = """\
-Geolux LX-80 non-contact radar level meter: live terminal UI, RS-232
-transmit-line probe with success tally, device settings browser, parameter
-editing and CSV logging.
+DESCRIPTION_HELP = f"""\
+geolux_tui.py {VERSION} - Geolux LX-80 non-contact radar level meter: live
+terminal UI, RS-232 transmit-line probe with success tally, device settings
+browser, parameter editing and CSV logging.
 
 NMEA sentences (device -> host, manual ch. 6.1 / 7.1) are shown as cards with
 the title above each value and logged to CSV.  The servicing protocol
@@ -1577,6 +1580,9 @@ def parse_args(argv=None):
     )
     ap.add_argument("-h", "--help", "-?", action="help",
                     help="show this help and exit")
+    ap.add_argument("--version", action="version",
+                    version=f"%(prog)s {VERSION}",
+                    help="show the program version and exit")
     ap.add_argument("-p", "--port", default=DEFAULT_PORT, metavar="PORT",
                     help="serial device (default: %(default)s)")
     ap.add_argument("-b", "--baud", type=int, default=DEFAULT_BAUD, metavar="BAUD",

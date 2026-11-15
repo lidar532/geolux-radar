@@ -39,6 +39,8 @@ import sys
 import webbrowser
 import zlib
 
+from version import VERSION
+
 from bokeh.io import output_file, save
 from bokeh.resources import INLINE
 from bokeh.layouts import column, gridplot
@@ -68,6 +70,78 @@ def find_latest(*patterns) -> str | None:
         if files:
             return max(files, key=os.path.getmtime)
     return None
+
+
+def is_log_file(name: str) -> bool:
+    return name.endswith(("-radar.txt", "-radar.txt.gz"))
+
+
+def logs_in(directory: str) -> list[str]:
+    """Every *-radar.txt[.gz] log under *directory* (and below), newest first."""
+    found = []
+    for root, _dirs, names in os.walk(directory):
+        for name in names:
+            if is_log_file(name):
+                found.append(os.path.join(root, name))
+
+    def mtime(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0.0
+
+    return sorted(found, key=mtime, reverse=True)
+
+
+def human_size(size: int) -> str:
+    """File size for the picker listing."""
+    value = float(size)
+    for unit in ("B", "KB", "MB"):
+        if value < 1024:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} GB"
+
+
+def choose_log(directory: str) -> str | None:
+    """Let the user pick a log when a directory was passed; None = quit."""
+    logs = logs_in(directory)
+    if not logs:
+        sys.stderr.write(f"no *-radar.txt[.gz] logs in {directory} "
+                         "(subdirectories are searched too)\n")
+        return None
+
+    print(f"Logs in {directory} (newest first):")
+    width = min(60, max(len(os.path.relpath(p, directory)) for p in logs))
+    for i, path in enumerate(logs, 1):
+        try:
+            st = os.stat(path)
+            when = dt.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+            size = human_size(st.st_size)
+        except OSError:
+            when, size = "?", "?"
+        rel = os.path.relpath(path, directory)
+        print(f"  {i:>3}) {rel:<{width}}  {size:>9}  {when}")
+
+    prompt = f"Select 1-{len(logs)} [Enter = newest, q = quit]: "
+    while True:
+        try:
+            answer = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):     # pipes, cron, ^C
+            print()
+            answer = ""
+        if not answer:
+            return logs[0]
+        if answer.lower() in ("q", "quit", "exit"):
+            return None
+        try:
+            choice = int(answer)
+        except ValueError:
+            print(f"  enter 1-{len(logs)}, Enter for the newest, or q to quit")
+            continue
+        if 1 <= choice <= len(logs):
+            return logs[choice - 1]
+        print(f"  {choice} is out of range 1-{len(logs)}")
 
 
 def is_gzip(path: str) -> bool:
@@ -323,6 +397,7 @@ def stats_html(path, data, units, total=None, decimated=False):
         bits.append(f"temp avg {statistics.fmean(temp):.1f} \u00b0C")
     if decimated:
         bits.append(f"(decimated to {shown} points)")
+    bits.append(f'<span style="color:#999">geolux-radar {VERSION}</span>')
     return (
         '<div style="font:13px system-ui,sans-serif;color:#444;padding:6px 2px">'
         + " &nbsp;\u00b7&nbsp; ".join(b for b in bits if b)
@@ -344,14 +419,13 @@ def build_layout(source, units, title, subtitle):
         sizing_mode="stretch_width",
     )
     p_dist.line("t", "dist", source=source, color=C_ACTUAL, line_width=2,
-                legend_label="Actual distance (L1)")
+                legend_label="L1 line")
     p_dist.scatter("t", "dist", source=source, color=C_ACTUAL, size=6,
-                   alpha=0.85, legend_label="Actual distance (L1)")
+                   alpha=0.85, legend_label="L1 points")
     p_dist.line("t", "avg", source=source, color=C_AVERAGE, line_width=2,
-                line_dash="dashed", legend_label="Average distance (L2)")
+                line_dash="dashed", legend_label="L2 line")
     p_dist.scatter("t", "avg", source=source, color=C_AVERAGE, size=6,
-                   marker="circle_x", alpha=0.85,
-                   legend_label="Average distance (L2)")
+                   marker="circle_x", alpha=0.85, legend_label="L2 points")
     p_dist.yaxis.axis_label = f"Distance ({units})"
     p_dist.legend.location = "top_left"
     p_dist.legend.click_policy = "hide"
@@ -379,9 +453,9 @@ def build_layout(source, units, title, subtitle):
         sizing_mode="stretch_width",
     )
     p_snr.line("t", "snr", source=source, color=C_SNR, line_width=1.5,
-               legend_label="SNR")
+               legend_label="SNR line")
     p_snr.scatter("t", "snr", source=source, color=C_SNR, size=5, alpha=0.85,
-                  legend_label="SNR")
+                  legend_label="SNR points")
     p_snr.yaxis.axis_label = "SNR (dB)"
     p_snr.xaxis.visible = False
     p_snr.legend.location = "top_left"
@@ -409,9 +483,9 @@ def build_layout(source, units, title, subtitle):
         sizing_mode="stretch_width",
     )
     p_temp.line("t", "temp", source=source, color=C_TEMP, line_width=1.5,
-                legend_label="Temperature")
+                legend_label="Temp line")
     p_temp.scatter("t", "temp", source=source, color=C_TEMP, size=5,
-                   alpha=0.85, legend_label="Temperature")
+                   alpha=0.85, legend_label="Temp points")
     p_temp.yaxis.axis_label = "Temperature (\u00b0C)"
     p_temp.xaxis.axis_label = "Capture time"
     p_temp.legend.location = "top_left"
@@ -455,8 +529,13 @@ def run_static(args, path):
                    sizing_mode="stretch_width")
 
     out = args.output or default_output(path)
-    title = f"Geolux LX-80 - {os.path.basename(path)}"
-    layout = build_layout(source, units, f"Geolux LX-80 radar \u2014 {os.path.basename(path)}", subtitle)
+    base = os.path.basename(path)
+    title = f"Geolux LX-80 - {base} (geolux-radar {VERSION})"
+    layout = build_layout(
+        source, units,
+        f"Geolux LX-80 radar \u2014 {base}  \u00b7  geolux-radar {VERSION}",
+        subtitle,
+    )
     if args.inline:                      # embed BokehJS -> works offline
         save(layout, filename=out, title=title, resources=INLINE)
     else:
@@ -481,7 +560,10 @@ def run_live(args, path):
         subtitle = Div(text=stats_html(path, cols_data, units, total=len(rows)),
                        sizing_mode="stretch_width")
         layout = build_layout(
-            source, units, f"Geolux LX-80 radar \u2014 {os.path.basename(path)} (live)", subtitle
+            source, units,
+            f"Geolux LX-80 radar \u2014 {os.path.basename(path)} (live)"
+            f"  \u00b7  geolux-radar {VERSION}",
+            subtitle,
         )
         cols = column_map(path)
         state = {"offset": initial_offset(path)}
@@ -522,14 +604,15 @@ def run_live(args, path):
 
 
 USAGE_HELP = """\
-plot_radar.py [-h | --help | -?] [FILE] [-o OUTPUT] [--live] [--port PORT]
-              [--interval SEC] [--no-open] [--inline] [--max-points N]"""
+plot_radar.py [-h | --help | -? | --version] [FILE] [-o OUTPUT] [--live]
+                     [--port PORT] [--interval SEC] [--no-open] [--inline]
+                     [--max-points N]"""
 
-DESCRIPTION_HELP = """\
-Plot Geolux LX-80 radar logs (<stamp>-radar.txt.gz, written by geolux_tui.py)
-with Bokeh.  Three linked panels show distance, SNR and instrument
-temperature against the capture time, with hover tools, zoom/pan tools and a
-summary banner.
+DESCRIPTION_HELP = f"""\
+plot_radar.py {VERSION} - plot Geolux LX-80 radar logs (<stamp>-radar.txt.gz,
+written by geolux_tui.py) with Bokeh.  Three linked panels show distance, SNR
+and instrument temperature against the capture time, with hover tools,
+zoom/pan tools and a summary banner.
 
 The gzip-compressed logs are decompressed on the fly; plain <stamp>-radar.txt
 logs from older runs are read too.
@@ -542,6 +625,7 @@ EPILOG_HELP = """\
 examples:
   ./plot_radar.py                                            newest *-radar.txt[.gz] under ./data
   ./plot_radar.py data/2026-1114/2026-1114-122308-radar.txt     plot a specific log (.gz too)
+  ./plot_radar.py data/2026-1115/                            list the logs in a directory and pick one
   ./plot_radar.py -o /tmp/plot.html --no-open                write HTML, do not open a browser
   ./plot_radar.py --inline                                   embed BokehJS (works offline)
   ./plot_radar.py --live --port 5006                         auto-refreshing Bokeh server
@@ -558,15 +642,24 @@ input files:
   distance unit is taken from the header suffix, so m, ft, mm, cm and in all
   work.  Missing values (empty cells) are plotted as gaps.
 
+  FILE may also be a directory (for example ./data or a dated capture
+  directory): every *-radar.txt[.gz] found there - subdirectories included -
+  is listed newest first with its size and timestamp, and you pick one by
+  number.  Enter selects the newest log and q quits.  With no FILE at all the
+  newest log under ./data is used.
+
 panels (x axis linked, one toolbar on the distance panel):
   distance     actual (L1, solid, circles) and average (L2, dashed, crosses);
-               click a legend entry to hide or show that element
-  SNR          dB, with a dashed reference line at 10 dB (low-echo warning)
-  temperature  instrument temperature in degrees Celsius
+               legend entries L1 line / L1 points / L2 line / L2 points
+  SNR          dB, with a dashed reference line at 10 dB (low-echo warning);
+               legend entries SNR line / SNR points
+  temperature  instrument temperature in degrees Celsius; legend entries
+               Temp line / Temp points
 
   Every series is drawn as a line plus markers (size 5-6 px, alpha 0.85) so
-  the data is readable when zoomed in, and each panel has its own legend: a
-  click hides/shows that element (SNR and temperature too).
+  the data is readable when zoomed in.  Each panel has its own legend with
+  click_policy 'hide', and line and points are separate entries, so points
+  and lines can be switched on and off independently.
 
   Mouse-wheel zoom is active by default in all three panels - scroll to zoom,
   drag to pan, without selecting a tool first.  The toolbar above the distance
@@ -604,9 +697,13 @@ def parse_args(argv=None):
     )
     ap.add_argument("-h", "--help", "-?", action="help",
                     help="show this help and exit")
+    ap.add_argument("--version", action="version",
+                    version=f"%(prog)s {VERSION}",
+                    help="show the program version and exit")
     ap.add_argument("file", nargs="?", metavar="FILE",
-                    help="log file to plot (default: newest *-radar.txt[.gz] under "
-                         "./data, including its YYYY-MMDD subdirectories, "
+                    help="log file, or a directory to choose a log from "
+                         "(default: newest *-radar.txt[.gz] under ./data, "
+                         "including its YYYY-MMDD subdirectories, "
                          "falling back to the current directory)")
     ap.add_argument("-o", "--output", metavar="OUTPUT",
                     help="output HTML file for static mode "
@@ -630,13 +727,19 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+
     path = args.file or find_latest(
         os.path.join(DEFAULT_DATA_DIR, "*", "*-radar.txt*"),   # data/YYYY-MMDD/
         os.path.join(DEFAULT_DATA_DIR, "*-radar.txt*"),       # older flat layout
         "*-radar.txt*",                                       # current directory
     )
+    if path and os.path.isdir(path):
+        path = choose_log(path)          # directory: list the logs and pick one
+        if path is None:
+            return 2
     if not path:
-        sys.stderr.write("no *-radar.txt[.gz] log file found; pass a file name\n")
+        sys.stderr.write("no *-radar.txt[.gz] log file found; pass a file name "
+                         "or a directory to choose from\n")
         return 2
     if not os.path.exists(path):
         sys.stderr.write(f"file not found: {path}\n")
