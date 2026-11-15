@@ -24,7 +24,8 @@ alongside <stamp>-radar-cmd.log.gz (probe history) and
 
 Requires pyserial:   pip install pyserial
 Keys:  q quit | p pause logging | f freeze display | s set parameter
-       i device settings | g refresh settings | c reset counters
+       r factory reset | i device settings | g refresh settings
+       c reset counters | ? help
 
 Port is opened 115200 8N1 with echo disabled (termios ECHO cleared) and all
 CR characters stripped from received lines.
@@ -70,6 +71,7 @@ def default_log_dir(now=None) -> str:
     now = now or dt.datetime.now()
     return os.path.join(DATA_ROOT, now.strftime(DATE_DIR_FORMAT))
 GET_INFO = "#get_info"
+FACTORY_RESET = "#factory_reset"      # erases settings, needs a power cycle
 CMD_TERMINATOR = "\r\n"
 
 # $LVX field order (firmware > 2.3.2).  Older firmware sends only L1..L4.
@@ -618,7 +620,7 @@ class LinkMonitor(threading.Thread):
                 "cmd": f"#set_{param['key']}={value_text}",
                 "started": time.time(), "ack": [], "message": "sending...",
             }
-        self._jobs.put((param, value_text))
+        self._jobs.put(("set", param, value_text))
         self.wake.set()
         return True
 
@@ -664,17 +666,59 @@ class LinkMonitor(threading.Thread):
         self.probe()                       # probe immediately at start-up
         while not self._stop_evt.is_set():
             try:
-                param, value = self._jobs.get_nowait()
+                job = self._jobs.get_nowait()
             except queue.Empty:
                 pass
             else:
-                self._run_set(param, value)     # set + read-back verify
+                if job[0] == "reset":
+                    self._run_reset()
+                else:                      # ("set", param, value)
+                    self._run_set(job[1], job[2])
                 continue
             self.wake.wait(self.interval)
             self.wake.clear()
             if self._stop_evt.is_set():
                 break
             self.probe()
+
+    # -- factory reset ------------------------------------------------------
+    def submit_reset(self):
+        """Queue #factory_reset; one command at a time, like submit_set()."""
+        with self._lock:
+            job = self.job
+            if job is not None and not job.get("done", True):
+                return False                      # already busy
+            self.job = {
+                "label": "Factory reset", "key": "factory_reset",
+                "done": False, "ok": None, "ack": [],
+                "cmd": FACTORY_RESET, "started": time.time(),
+                "message": "sending...",
+            }
+        self._jobs.put(("reset",))
+        self.wake.set()
+        return True
+
+    def _run_reset(self):
+        """Send #factory_reset.  There is no read-back: the unit restarts."""
+        res = self._exchange(FACTORY_RESET, timeout=max(2.0, self.timeout))
+        ack = res["lines"]
+        ack_ok = any(line.lower().rstrip().endswith(":ok") for line in ack)
+        self._record(FACTORY_RESET, ack_ok, res, error="no ack")
+
+        if ack_ok:
+            msg = "reset accepted - power-cycle the unit now"
+        elif ack:
+            msg = "replied without OK - check the unit"
+        else:
+            msg = "no reply - the unit may already be restarting"
+
+        with self._lock:
+            self.job = {
+                "label": "Factory reset", "key": "factory_reset",
+                "done": True, "ok": bool(ack_ok), "ack": ack,
+                "cmd": FACTORY_RESET, "rtt": res["rtt"],
+                "message": msg, "started": res["start"],
+            }
 
 
 # --------------------------------------------------------------------------
@@ -1128,6 +1172,7 @@ HELP_TEXT = f"""\
    p        pause / resume CSV logging (probing continues)
    f        freeze the display (values and raw line)
    s        set a device parameter (dialog)
+   r        factory reset (type RESET to confirm - see below)
    i        device settings panel (the whole #get_info block)
    g        probe now / refresh the settings
    c        reset the checksum counters
@@ -1140,6 +1185,12 @@ HELP_TEXT = f"""\
    The value is checked locally, then sent as #set_<param>=<value>.
    The device ack and the #get_info read-back (old -> new) are shown, and
    OK is only reported when the read-back matches.
+
+ FACTORY RESET (r)
+   Sends #factory_reset: it erases every setting (unit, sensor height, level
+   offset, dead zones, averaging, filter, baud rate) and the LX-80 must then
+   be power-cycled.  The dialog asks you to type RESET before anything is
+   sent, and the exchange is written to the probe log.
 
  FILES (in -d DIR, default data/YYYY-MMDD, one directory per day; all gzipped)
    <stamp>-radar.txt.gz        CSV, one row per measurement frame
@@ -1170,6 +1221,79 @@ def draw_help(stdscr, h, w, offset=0):
     stdscr.noutrefresh()
     curses.doupdate()
     return offset
+
+
+def draw_reset_dialog(stdscr, h, w, dlg):
+    """Modal factory-reset confirmation, in-flight state and result."""
+    if h < 12 or w < 52:
+        stdscr.erase()
+        addstr(stdscr, 0, 0,
+               " reset dialog needs at least 52x12 - Esc to cancel "[: w - 1],
+               COLORS.get("error", curses.A_BOLD))
+        stdscr.noutrefresh()
+        curses.doupdate()
+        return
+
+    box = box_chars()
+    phase = dlg["phase"]
+    inner_w = min(max(50, w - 10), 70)
+    box_h = 12 if phase == "confirm" else (8 if phase == "apply" else 10)
+    box_h = min(box_h, h - 2)
+    y0 = max(1, (h - box_h) // 2)
+    x0 = max(1, (w - inner_w) // 2)
+    box_w = inner_w
+    border = COLORS.get("border", curses.A_DIM)
+
+    for dy in range(box_h):
+        addstr(stdscr, y0 + dy, x0, " " * box_w, curses.A_NORMAL)
+    addstr(stdscr, y0, x0, box["tl"] + box["h"] * (box_w - 2) + box["tr"], border)
+    for dy in range(1, box_h - 1):
+        addstr(stdscr, y0 + dy, x0, box["v"], border)
+        addstr(stdscr, y0 + dy, x0 + box_w - 1, box["v"], border)
+    addstr(stdscr, y0 + box_h - 1, x0, box["bl"] + box["h"] * (box_w - 2) + box["br"], border)
+
+    addstr(stdscr, y0, x0 + 2, " Factory reset ", COLORS.get("error", curses.A_BOLD))
+    iw = box_w - 4
+
+    if phase == "confirm":
+        warn = COLORS.get("warn", curses.A_BOLD)
+        for i, text in enumerate((
+            "This erases every device setting: unit, sensor height, level",
+            "offset, dead zones, averaging, filter and baud rate.",
+            "The LX-80 then needs a power cycle; measurements stop until then.",
+        )):
+            addstr(stdscr, y0 + 2 + i, x0 + 2, text[:iw], warn if i == 0 else 0)
+        addstr(stdscr, y0 + 6, x0 + 2, "Type RESET to confirm:"[:iw], curses.A_DIM)
+        addstr(stdscr, y0 + 7, x0 + 2, (dlg.get("typed", "") + "_")[:iw],
+               COLORS.get("primary", curses.A_BOLD))
+        if dlg.get("error"):
+            addstr(stdscr, y0 + 9, x0 + 2, dlg["error"][:iw],
+                   COLORS.get("error", curses.A_BOLD))
+        addstr(stdscr, y0 + box_h - 2, x0 + 2,
+               " Enter: send   Esc: cancel "[:iw], curses.A_DIM)
+
+    elif phase == "apply":
+        dots = "." * (1 + int(time.time() * 2) % 3)
+        addstr(stdscr, y0 + 2, x0 + 2, f"sending #factory_reset{dots}"[:iw],
+               COLORS.get("warn", curses.A_BOLD))
+        addstr(stdscr, y0 + 4, x0 + 2, "waiting for the device reply"[:iw],
+               curses.A_DIM)
+        addstr(stdscr, y0 + box_h - 2, x0 + 2, " please wait "[:iw], curses.A_DIM)
+
+    else:                                   # result
+        job = dlg.get("job") or {}
+        for k, line in enumerate((job.get("ack") or [])[:2]):
+            addstr(stdscr, y0 + 2 + k, x0 + 2, f"reply     : {line}"[:iw],
+                   curses.A_DIM)
+        ok = job.get("ok")
+        addstr(stdscr, y0 + 4, x0 + 2,
+               (" OK  " if ok else " FAILED  ")
+               + str(job.get("message", ""))[: iw - 10],
+               COLORS.get("primary" if ok else "error", curses.A_BOLD))
+        addstr(stdscr, y0 + 6, x0 + 2,
+               "Power-cycle the LX-80: settings are back to the defaults."[:iw],
+               COLORS.get("warn", 0) if ok else curses.A_DIM)
+        addstr(stdscr, y0 + box_h - 2, x0 + 2, " Esc: close "[:iw], curses.A_DIM)
 
 
 def draw(stdscr, shared: SharedState, meta, recorder, view):
@@ -1283,10 +1407,12 @@ def draw(stdscr, shared: SharedState, meta, recorder, view):
     raw = view["raw"][: max(0, w - 3)]
     addstr(stdscr, h - 2, 0, f" {raw}"[: w - 1], curses.A_DIM)
 
-    keys = " q quit  p pause log  f freeze  s set  i settings  g refresh  ? help "
+    keys = " q quit  p pause log  f freeze  s set  r reset  i settings  g refresh  ? help "
     addstr(stdscr, h - 1, 0, keys.ljust(w - 1)[: w - 1], curses.A_REVERSE)
 
-    if view.get("dialog"):
+    if view.get("reset"):
+        draw_reset_dialog(stdscr, h, w, view["reset"])
+    elif view.get("dialog"):
         draw_set_dialog(stdscr, h, w, view["dialog"], meta,
                         view.get("info") or {}, (view.get("link") or {}).get("job"))
 
@@ -1321,6 +1447,44 @@ def run_tui(stdscr, shared: SharedState, meta, recorder, link):
                 view["help_offset"] = max(0, view.get("help_offset", 0) - 10)
             elif ch in (ord("q"), ord("Q")):
                 break
+            draw(stdscr, shared, meta, recorder, view)
+            if meta["duration"] and time.time() - shared.start >= meta["duration"]:
+                break
+            continue
+
+        # ---- modal factory-reset dialog ----
+        rst = view.get("reset")
+        if rst is not None:
+            job = (view.get("link") or {}).get("job")
+            if (rst["phase"] == "apply" and job and job.get("done")
+                    and job.get("cmd") == FACTORY_RESET):
+                rst["phase"] = "result"
+                rst["job"] = job
+
+            if rst["phase"] == "confirm":
+                if ch == 27:
+                    view["reset"] = None
+                elif ch in (curses.KEY_BACKSPACE, 8, 127):
+                    rst["typed"] = rst.get("typed", "")[:-1]
+                elif ch in (10, 13, curses.KEY_ENTER):
+                    if rst.get("typed", "").strip().upper() != "RESET":
+                        rst["error"] = "type RESET to confirm"
+                    elif link is None:
+                        rst["error"] = "TX probe disabled (--no-probe)"
+                    elif link.submit_reset():
+                        rst["phase"] = "apply"
+                        rst["error"] = None
+                    else:
+                        rst["error"] = "another command is still in progress"
+                elif 32 <= ch < 127 and len(rst.get("typed", "")) < 16:
+                    rst["typed"] = rst.get("typed", "") + chr(ch)
+            elif rst["phase"] == "result":
+                if ch in (27, 10, 13, curses.KEY_ENTER, ord("r"), ord("R")):
+                    view["reset"] = None
+
+            if link is not None:
+                view["link"] = link.snapshot()
+                view["info"] = view["link"]["info"]
             draw(stdscr, shared, meta, recorder, view)
             if meta["duration"] and time.time() - shared.start >= meta["duration"]:
                 break
@@ -1386,6 +1550,10 @@ def run_tui(stdscr, shared: SharedState, meta, recorder, link):
             shared.toggle("frozen")
         elif ch in (ord("s"), ord("S")):
             view["dialog"] = {"phase": "select", "index": 0, "buffer": "", "error": None}
+            view["show_info"] = False        # dialogs are drawn over the cards only
+        elif ch in (ord("r"), ord("R")):
+            view["reset"] = {"phase": "confirm", "typed": "", "error": None}
+            view["show_info"] = False
         elif ch in (ord("i"), ord("I")):
             view["show_info"] = not view["show_info"]
         elif ch == 27:                       # Esc closes the settings panel
@@ -1482,9 +1650,9 @@ examples:
 tui keys:
   q  quit                    p  pause / resume CSV logging
   f  freeze the display      s  set a device parameter (dialog)
-  i  device settings panel   g  refresh settings (#get_info now)
-  c  reset the counters      ?  key overview and help (h works too)
-  Esc close a panel or dialog
+  r  factory reset           i  device settings panel
+  c  reset the counters      g  refresh settings (#get_info now)
+  ?  key overview and help   Esc close a panel or dialog
 
   The set dialog (s) is a single "set" command: pick the parameter from the
   dropdown with j/k or the arrow keys, Enter to edit, type the value, Enter
@@ -1539,6 +1707,15 @@ settable parameters (single "set" dialog):
   measurement_frequency is exposed for completeness only: on the firmware
   tested (2.5.4) the device ignores #set_measurement_frequency, so the
   read-back check reports FAILED and the rate stays at 10 Hz.
+
+factory reset (r):
+  Sends #factory_reset (manual ch. 7.2).  It erases every setting - unit,
+  sensor height, level offset, dead zones, averaging, filter type, power
+  save, baud rate - and the LX-80 needs a power cycle afterwards; NMEA
+  output stops in the meantime.  Nothing is sent until you type RESET at
+  the prompt.  There is no read-back to verify (the unit restarts), so the
+  dialog only reports the reply and the exchange is written to
+  <stamp>-radar-cmd.log.gz; check the settings panel after the power cycle.
 
 firmware notes (verified on firmware 2.5.4):
   * #set_level_offset shifts the reported distance, so the level moves the

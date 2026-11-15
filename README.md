@@ -2,7 +2,7 @@
 
 2026-1014 W. Wright github.com/lidar532
 
-Version **1.1.0** (`version.py`, git tag `v1.1.0`). The version is shown by
+Version **1.2.0** (`version.py`, git tag `v1.2.0`). The version is shown by
 `--version` in both programs, in the TUI header and help overlay, and in the
 title and summary banner of every plot.  The repository URL
 (`https://github.com/lidar532/geolux-radar`, from `version.py`) is displayed at
@@ -261,8 +261,9 @@ adapter's transmit line reaches the device:
 └──────────────────────┘ └──────────────────────┘ └──────────────────────┘
 ```
 
-Keys: `q` quit, `p` pause logging, `f` freeze, `s` set parameter, `i` device
-settings, `g` refresh, `c` reset counters, `?` help, `Esc` close a panel.
+Keys: `q` quit, `p` pause logging, `f` freeze, `s` set parameter, `r` factory
+reset, `i` device settings, `g` refresh, `c` reset counters, `?` help, `Esc`
+close a panel.
 
 ### Step 7 — WSL2: record and plot
 
@@ -416,7 +417,7 @@ cd ~/github-projects/geolux-radar && ./geolux_tui.py
 ...
  csum 0 err / 2345 sent (0.00%) · no errors   ·   c: reset
  $LVX,3.576,3.576,32,6.423,6.423,47.250,1.115*5F
- q quit  p pause log  f freeze  s set  i settings  g refresh  ? help
+ q quit  p pause log  f freeze  s set  r reset  i settings  g refresh  ? help
 ```
 
 * **Header** — port/baud, state, frame rate, frame count and time since the
@@ -461,6 +462,7 @@ unit is used in the CSV column names.
 | `p` | pause / resume CSV logging (probing continues) |
 | `f` | freeze the display (values and raw line) |
 | `s` | open the **set parameter** dialog |
+| `r` | **factory reset** the device (type `RESET` to confirm) |
 | `i` | device settings panel (the whole `#get_info` block) |
 | `g` | probe now / refresh the settings |
 | `c` | reset the checksum counters |
@@ -694,6 +696,29 @@ will therefore report `FAILED` with *"device accepted the command but the
 value did not change"*. *Averaging frames* is the supported rate-related
 knob.
 
+### Resetting the unit
+
+Press `r` to factory-reset the LX-80.  The dialog lists what will be lost and
+nothing is transmitted until you type `RESET` and press `Enter` (`Esc`
+cancels at any point before that).  `r` then sends
+
+```
+#factory_reset          ->   "#factory_reset:OK"
+```
+
+and the exchange is appended to `<stamp>-radar-cmd.log.gz`.
+
+> **This erases every setting**: unit, sensor height, level offset, dead zone
+> min/max, averaging frames, filter type, power save and baud rate.  The unit
+> then needs a power cycle — NMEA output and probes stop until it is
+> restarted.  If the baud rate was changed, reconnect at the factory default
+> (115200).
+
+Unlike the `s` dialog there is no read-back to verify (the unit restarts), so
+the result dialog only reports the reply.  After the power cycle, press `g`
+to refresh and check the settings panel: values should be back to the factory
+defaults, and the snapshot file is rewritten.
+
 ---
 
 ## Protocol reference
@@ -766,7 +791,7 @@ Geolux Instrument Configurator.
 | `#set_analog_min/max`, `#set_modbus_*`, `#set_sdi_id` | — | RS-485 / 4–20 mA only |
 | `#set_baud_rate=9600…115200` | RS-232 baud | **dangerous**: port must be reopened at the new rate |
 | `#set_sdi_sleep=0` | SDI-12 auto sleep | **dangerous**: RS-232 goes dead until power-cycled and reconfigured within 60 s |
-| `#factory_reset` | — | **dangerous**: needs a power cycle, erases settings |
+| `#factory_reset` | — | **dangerous**: erases all settings and needs a power cycle; exposed via `r` with typed confirmation |
 
 ---
 
@@ -943,8 +968,10 @@ of `geolux_tui.py`:
 * Six parameters are editable from the TUI (sensor height, level offset, dead
   zone min/max, measurement frequency, averaging frames); the rest of the
   documented settings need a raw-command prompt or the vendor application.
-* `#set_baud_rate`, `#set_sdi_sleep` and `#factory_reset` are deliberately
-  **not** exposed, because a mistake can strand the link.
+* `#set_baud_rate` and `#set_sdi_sleep` are deliberately **not** exposed,
+  because a mistake can strand the link.  `#factory_reset` *is* exposed as
+  `r`, but only behind a typed `RESET` confirmation (see
+  [Resetting the unit](#resetting-the-unit)).
 * The measurement/output rate cannot be changed on the tested firmware; the
   command is exposed only so the read-back check can show that the device
   ignores it.
