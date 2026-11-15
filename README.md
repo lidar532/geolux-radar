@@ -2,7 +2,7 @@
 
 2026-1014 W. Wright github.com/lidar532
 
-Version **1.2.0** (`version.py`, git tag `v1.2.0`). The version is shown by
+Version **1.2.1** (`version.py`, git tag `v1.2.1`). The version is shown by
 `--version` in both programs, in the TUI header and help overlay, and in the
 title and summary banner of every plot.  The repository URL
 (`https://github.com/lidar532/geolux-radar`, from `version.py`) is displayed at
@@ -700,24 +700,42 @@ knob.
 
 Press `r` to factory-reset the LX-80.  The dialog lists what will be lost and
 nothing is transmitted until you type `RESET` and press `Enter` (`Esc`
-cancels at any point before that).  `r` then sends
-
-```
-#factory_reset          ->   "#factory_reset:OK"
-```
-
-and the exchange is appended to `<stamp>-radar-cmd.log.gz`.
+cancels at any point before that).  `r` then sends `#factory_reset` and the
+exchange is appended to `<stamp>-radar-cmd.log.gz`.
 
 > **This erases every setting**: unit, sensor height, level offset, dead zone
-> min/max, averaging frames, filter type, power save and baud rate.  The unit
-> then needs a power cycle — NMEA output and probes stop until it is
-> restarted.  If the baud rate was changed, reconnect at the factory default
-> (115200).
+> min/max, averaging frames, filter type, power save and baud rate.
 
-Unlike the `s` dialog there is no read-back to verify (the unit restarts), so
-the result dialog only reports the reply.  After the power cycle, press `g`
-to refresh and check the settings panel: values should be back to the factory
-defaults, and the snapshot file is rewritten.
+Verified on the test unit (firmware 2.5.4, 2026-11-15):
+
+```
+sent     #factory_reset
+reply    #factory_reset:OK
+reply    #set_raw=01000000983A0000000000002C01000000000000C8000...   (settings dump)
+```
+
+* The link **stayed up**: NMEA and probes continued at ~10 Hz and no power
+  cycle was needed, contrary to the manual's note.  The result dialog
+  therefore recommends (not demands) a power cycle.
+* `#get_info` afterwards showed factory defaults, including the unit change:
+
+  | Field | before | after reset |
+  |---|---|---|
+  | `unit_type` | `2` (m) | `0` (mm) |
+  | `sensor_height` | `10.000` (m) | `-0.000` |
+  | `level_range` | `15.0` | `15000.0` |
+  | `deadzone_min` / `deadzone_max` | `0.200` / `15.0` | `200.0` / `15000.0` |
+  | `analog_output_max` | `15.0` | `15000.0` |
+  | `wave_analysis_lenght` | `3500` | `300` |
+
+  Everything else (filter type, averaging frames, baud rate, NMEA flags,
+  power save) already had its default value.
+
+Because the unit comes back in **mm** with `sensor_height = 0`, distances are
+reported in millimetres and levels become negative (`level = 0 − distance`)
+until you set the unit and sensor height again.  Press `g` after the reset to
+refresh the settings panel, and take a snapshot before resetting if you need
+to restore the configuration.
 
 ---
 
@@ -912,6 +930,14 @@ Verified on firmware **2.5.4** (serial 102181):
    otherwise Python's `csv` module refuses the whole file
    (`_csv.Error: line contains NUL`); the affected value becomes a gap while
    the rest of the log plots normally.
+
+8. **`#factory_reset` keeps the link alive and returns the unit in mm.**
+   The reply is `#factory_reset:OK` followed by an undocumented
+   `#set_raw=<hex>` settings dump.  On firmware 2.5.4 NMEA output and
+   `#get_info` probes continued without a power cycle (the manual asks for
+   one), but `unit_type` comes back as `0` (mm), `sensor_height` as `0` and
+   `level_range`/dead-zone/analog values are rescaled to mm — see
+   [Resetting the unit](#resetting-the-unit).
 
 ---
 

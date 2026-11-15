@@ -706,7 +706,7 @@ class LinkMonitor(threading.Thread):
         self._record(FACTORY_RESET, ack_ok, res, error="no ack")
 
         if ack_ok:
-            msg = "reset accepted - power-cycle the unit now"
+            msg = "reset accepted - settings are back to factory defaults"
         elif ack:
             msg = "replied without OK - check the unit"
         else:
@@ -1188,9 +1188,10 @@ HELP_TEXT = f"""\
 
  FACTORY RESET (r)
    Sends #factory_reset: it erases every setting (unit, sensor height, level
-   offset, dead zones, averaging, filter, baud rate) and the LX-80 must then
-   be power-cycled.  The dialog asks you to type RESET before anything is
-   sent, and the exchange is written to the probe log.
+   offset, dead zones, averaging, filter, baud rate).  The dialog asks you to
+   type RESET before anything is sent, and the exchange goes to the probe log.
+   On firmware 2.5.4 the link stayed up afterwards (the manual suggests a
+   power cycle) and the unit came back in mm with sensor_height 0.
 
  FILES (in -d DIR, default data/YYYY-MMDD, one directory per day; all gzipped)
    <stamp>-radar.txt.gz        CSV, one row per measurement frame
@@ -1260,7 +1261,7 @@ def draw_reset_dialog(stdscr, h, w, dlg):
         for i, text in enumerate((
             "This erases every device setting: unit, sensor height, level",
             "offset, dead zones, averaging, filter and baud rate.",
-            "The LX-80 then needs a power cycle; measurements stop until then.",
+            "A power cycle is recommended afterwards (manual ch. 7.2).",
         )):
             addstr(stdscr, y0 + 2 + i, x0 + 2, text[:iw], warn if i == 0 else 0)
         addstr(stdscr, y0 + 6, x0 + 2, "Type RESET to confirm:"[:iw], curses.A_DIM)
@@ -1282,7 +1283,9 @@ def draw_reset_dialog(stdscr, h, w, dlg):
 
     else:                                   # result
         job = dlg.get("job") or {}
-        for k, line in enumerate((job.get("ack") or [])[:2]):
+        ack = [ln for ln in (job.get("ack") or []) if "factory_reset" in ln.lower()]
+        ack = ack or (job.get("ack") or [])[:1]
+        for k, line in enumerate(ack[:2]):
             addstr(stdscr, y0 + 2 + k, x0 + 2, f"reply     : {line}"[:iw],
                    curses.A_DIM)
         ok = job.get("ok")
@@ -1291,7 +1294,9 @@ def draw_reset_dialog(stdscr, h, w, dlg):
                + str(job.get("message", ""))[: iw - 10],
                COLORS.get("primary" if ok else "error", curses.A_BOLD))
         addstr(stdscr, y0 + 6, x0 + 2,
-               "Power-cycle the LX-80: settings are back to the defaults."[:iw],
+               ("Settings are back to factory defaults - press g to review."
+                if ok else
+                "Power-cycle the unit, then press g to check the settings.")[:iw],
                COLORS.get("warn", 0) if ok else curses.A_DIM)
         addstr(stdscr, y0 + box_h - 2, x0 + 2, " Esc: close "[:iw], curses.A_DIM)
 
@@ -1711,11 +1716,15 @@ settable parameters (single "set" dialog):
 factory reset (r):
   Sends #factory_reset (manual ch. 7.2).  It erases every setting - unit,
   sensor height, level offset, dead zones, averaging, filter type, power
-  save, baud rate - and the LX-80 needs a power cycle afterwards; NMEA
-  output stops in the meantime.  Nothing is sent until you type RESET at
-  the prompt.  There is no read-back to verify (the unit restarts), so the
-  dialog only reports the reply and the exchange is written to
-  <stamp>-radar-cmd.log.gz; check the settings panel after the power cycle.
+  save, baud rate.  Nothing is sent until you type RESET at the prompt.
+  There is no read-back to verify, so the dialog only reports the reply; the
+  exchange is written to <stamp>-radar-cmd.log.gz.
+
+  Verified on 2.5.4 (2026-11-15): the reply was #factory_reset:OK plus a
+  #set_raw=<hex> settings dump, and NMEA and probes continued without a power
+  cycle (the manual asks for one).  #get_info then reported unit_type 0 (mm),
+  sensor_height 0, level_range/deadzone/analog scaled to mm and
+  wave_analysis_lenght 300 - so set the unit and sensor height again.
 
 firmware notes (verified on firmware 2.5.4):
   * #set_level_offset shifts the reported distance, so the level moves the
