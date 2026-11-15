@@ -339,18 +339,23 @@ def build_layout(source, units, title, subtitle):
         title=title,
         x_axis_type="datetime",
         tools=TOOLS,
-        toolbar_location="right",
+        toolbar_location="above",
+        active_scroll="wheel_zoom",      # mouse wheel zooms without picking a tool
         sizing_mode="stretch_width",
     )
     p_dist.line("t", "dist", source=source, color=C_ACTUAL, line_width=2,
                 legend_label="Actual distance (L1)")
-    p_dist.scatter("t", "dist", source=source, color=C_ACTUAL, size=3,
-                   alpha=0.45, muted=True)
+    p_dist.scatter("t", "dist", source=source, color=C_ACTUAL, size=6,
+                   alpha=0.85, legend_label="Actual distance (L1)")
     p_dist.line("t", "avg", source=source, color=C_AVERAGE, line_width=2,
                 line_dash="dashed", legend_label="Average distance (L2)")
+    p_dist.scatter("t", "avg", source=source, color=C_AVERAGE, size=6,
+                   marker="circle_x", alpha=0.85,
+                   legend_label="Average distance (L2)")
     p_dist.yaxis.axis_label = f"Distance ({units})"
     p_dist.legend.location = "top_left"
     p_dist.legend.click_policy = "hide"
+    p_dist.legend.background_fill_alpha = 0.7
     p_dist.add_tools(
         HoverTool(
             tooltips=[
@@ -368,12 +373,20 @@ def build_layout(source, units, title, subtitle):
         height=170,
         x_axis_type="datetime",
         x_range=p_dist.x_range,
+        tools=TOOLS,
         toolbar_location=None,
+        active_scroll="wheel_zoom",
         sizing_mode="stretch_width",
     )
-    p_snr.line("t", "snr", source=source, color=C_SNR, line_width=1.5)
+    p_snr.line("t", "snr", source=source, color=C_SNR, line_width=1.5,
+               legend_label="SNR")
+    p_snr.scatter("t", "snr", source=source, color=C_SNR, size=5, alpha=0.85,
+                  legend_label="SNR")
     p_snr.yaxis.axis_label = "SNR (dB)"
     p_snr.xaxis.visible = False
+    p_snr.legend.location = "top_left"
+    p_snr.legend.click_policy = "hide"
+    p_snr.legend.background_fill_alpha = 0.7
     p_snr.add_layout(
         Span(location=10, dimension="width", line_color=C_WARN,
              line_dash="dashed", line_alpha=0.7)
@@ -390,12 +403,20 @@ def build_layout(source, units, title, subtitle):
         height=170,
         x_axis_type="datetime",
         x_range=p_dist.x_range,
+        tools=TOOLS,
         toolbar_location=None,
+        active_scroll="wheel_zoom",
         sizing_mode="stretch_width",
     )
-    p_temp.line("t", "temp", source=source, color=C_TEMP, line_width=1.5)
+    p_temp.line("t", "temp", source=source, color=C_TEMP, line_width=1.5,
+                legend_label="Temperature")
+    p_temp.scatter("t", "temp", source=source, color=C_TEMP, size=5,
+                   alpha=0.85, legend_label="Temperature")
     p_temp.yaxis.axis_label = "Temperature (\u00b0C)"
     p_temp.xaxis.axis_label = "Capture time"
+    p_temp.legend.location = "top_left"
+    p_temp.legend.click_policy = "hide"
+    p_temp.legend.background_fill_alpha = 0.7
     p_temp.add_tools(
         HoverTool(
             tooltips=[("time", "@t{%H:%M:%S}"), ("temp", "@temp{0.0} \u00b0C")],
@@ -404,10 +425,15 @@ def build_layout(source, units, title, subtitle):
         )
     )
 
+    # Toolbars are not merged: with merge_tools=True the shared toolbar holds
+    # ToolProxy objects, and Bokeh cannot pre-activate a scroll tool through a
+    # proxy, so wheel zoom would start out inert.  Keeping one toolbar on the
+    # distance panel and hidden (but live) toolbars on the linked panels makes
+    # wheel zoom active everywhere from load.
     grid = gridplot(
         [[p_dist], [p_snr], [p_temp]],
-        toolbar_location="right",
-        merge_tools=True,
+        toolbar_location=None,
+        merge_tools=False,
         sizing_mode="stretch_width",
     )
     return column(subtitle, grid, sizing_mode="stretch_width")
@@ -532,12 +558,19 @@ input files:
   distance unit is taken from the header suffix, so m, ft, mm, cm and in all
   work.  Missing values (empty cells) are plotted as gaps.
 
-panels (x axis linked, one shared toolbar):
-  distance     actual (L1, solid) and average (L2, dashed); click a legend
-               entry to hide or show it; low-SNR samples stay visible so you
-               can see when the radar lost its echo
+panels (x axis linked, one toolbar on the distance panel):
+  distance     actual (L1, solid, circles) and average (L2, dashed, crosses);
+               click a legend entry to hide or show that element
   SNR          dB, with a dashed reference line at 10 dB (low-echo warning)
   temperature  instrument temperature in degrees Celsius
+
+  Every series is drawn as a line plus markers (size 5-6 px, alpha 0.85) so
+  the data is readable when zoomed in, and each panel has its own legend: a
+  click hides/shows that element (SNR and temperature too).
+
+  Mouse-wheel zoom is active by default in all three panels - scroll to zoom,
+  drag to pan, without selecting a tool first.  The toolbar above the distance
+  panel still has box zoom, undo/redo, reset and save.
 
   A vertical-line hover tool on each panel shows the time and the values at
   that instant.  The banner above the plots summarises samples, duration,

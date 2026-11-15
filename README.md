@@ -788,12 +788,20 @@ both suffixes (`.txt.gz` → `-plot.html`).
 | `--inline` | off | embed BokehJS for offline use (~1.4 MB HTML) |
 | `--max-points` | `100000` | decimate long logs / cap live points (0 = keep all) |
 
-Panels (x axis linked, one shared toolbar):
+Panels (x axis linked, toolbar above the distance panel):
 
-1. **Distance** — actual `L1` (solid) and average `L2` (dashed); click a
-   legend entry to hide it. Markers keep single samples visible.
-2. **SNR** — dB, with a dashed 10 dB low-echo reference line.
-3. **Temperature** — instrument °C.
+1. **Distance** — actual `L1` (solid, circles) and average `L2` (dashed,
+   crosses); click a legend entry to hide or show that element.
+2. **SNR** — dB, with a dashed 10 dB low-echo reference line; legend entry
+   `SNR` toggles it.
+3. **Temperature** — instrument °C; legend entry `Temperature` toggles it.
+
+Every series is a line plus markers (5–6 px, alpha 0.85) so individual
+samples stay visible when zoomed in. **Mouse-wheel zoom is active by
+default** on all three panels — scroll to zoom, drag to pan, without
+selecting a tool first; box zoom, undo/redo, reset and save are in the
+toolbar. Each panel has its own legend and the click policy is *hide*, so any
+element can be switched off without re-plotting.
 
 A vertical-line hover tool on each panel shows time, distance, SNR and
 temperature; a banner above the plots summarises samples, duration,
