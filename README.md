@@ -253,7 +253,7 @@ adapter's transmit line reaches the device:
 ```
 
 Keys: `q` quit, `p` pause logging, `f` freeze, `s` set parameter, `i` device
-settings, `g` refresh, `c` reset counters, `Esc` close a panel.
+settings, `g` refresh, `c` reset counters, `?` help, `Esc` close a panel.
 
 ### Step 7 — WSL2: record and plot
 
@@ -407,7 +407,7 @@ cd ~/github-projects/geolux-radar && ./geolux_tui.py
 ...
  csum 0 err / 2345 sent (0.00%) · no errors   ·   c: reset
  $LVX,3.576,3.576,32,6.423,6.423,47.250,1.115*5F
- q quit  p pause log  f freeze  s set  i settings  g refresh
+ q quit  p pause log  f freeze  s set  i settings  g refresh  ? help
 ```
 
 * **Header** — port/baud, state, frame rate, frame count and time since the
@@ -455,7 +455,15 @@ unit is used in the CSV column names.
 | `i` | device settings panel (the whole `#get_info` block) |
 | `g` | probe now / refresh the settings |
 | `c` | reset the checksum counters |
+| `?` or `h` | help overlay: what the program does and every key (`j`/`k` scroll, `?`/`Esc` close) |
 | `Esc` | close a panel or dialog |
+
+### Help overlay
+
+`?` (or `h`) opens a full-screen overview of what the program does, the key
+bindings, the set dialog, the files it writes and where to find the command
+line help. It scrolls with `j`/`k` or PgUp/PgDn and closes with `?`, `h` or
+`Esc`. The same key is listed in the key bar at the bottom of the main view.
 
 ### Command line options
 
@@ -604,7 +612,11 @@ dropdown of parameters:
 ```
 ┌─ Set parameter ──────────────────────────────────────────────┐
 │ parameter                 current                             │
-│ > Level offset (m)        0.0                                 │
+│ > Sensor height (m)       10.0                                │
+│   Level offset (m)        0.0                                 │
+│   Dead zone min (m)       0.200                               │
+│   Dead zone max (m)       15.0                                │
+│   Measurement freq.       10.0                                │
 │   Averaging frames        20                                  │
 │ notes for the selected parameter                              │
 │  j/k or arrows: choose   Enter: edit   Esc: cancel            │
@@ -634,6 +646,8 @@ Currently exposed (add more by extending the `PARAMS` table in
 |---|---|---|---|
 | Sensor height | `#set_sensor_height=<value>` | 0 … 100 m (0 … 100000 in a mm-configured unit) | height of the instrument above the gauge zero; sets the datum for `L3`/`L4` |
 | Level offset | `#set_level_offset=<value>` | −1000 … 1000, in the device's unit | small correction; shifts the reported **distance**, so the level moves the other way |
+| Dead zone min / max | `#set_deadzone_min=<value>`, `#set_deadzone_max=<value>` | 0 … 100 m, in the device's unit | near/far cutoff of the measuring window; lowering the max stops phantom echoes at `level_range` |
+| Measurement frequency | `#set_measurement_frequency=<Hz>` | 0.1 … 1000 | output rate; **exposed for completeness only** — the tested firmware ignores this write (see below) |
 | Averaging frames | `#set_frame_number=<n>` | 1 … 1000 | number of 10 Hz samples averaged (20 ≈ 2 s window) |
 
 **Sensor height** is the datum: `level = sensor_height − distance`. Setting it
@@ -644,12 +658,26 @@ and leaves the distance readings untouched (verified on the test unit:
 device's current unit, so the same entry limits work whether the instrument
 reports mm, cm, m, in or ft.
 
-**Sample/output rate:** `measurement_frequency` is 10 Hz on the tested unit
-and **cannot be changed** — it is not in the manual's command list, and
+**Dead zone min/max** bound the active measuring window in the device's own
+unit. The factory maximum is `15.0`, which is also the default
+`level_range` — that is why an empty tank reports a flat ~15 m with SNR 0.
+Setting the max to the real maximum distance (or a little beyond it) removes
+those phantom readings; the minimum suppresses the near-field dead zone.
+Both are floats, so `0.35` is a valid entry.
+
+**Averaging frames** sets how many measurement samples are averaged into one
+output row; the output rate is unchanged, so 20 frames ≈ a 2 s window at
+10 Hz.
+
+**Sample/output rate:** `measurement_frequency` is exposed in the dialog
+because the field exists in `#get_info`, but on the unit tested (firmware
+2.5.4) it **cannot be changed** — it is not in the manual's command list, and
 `#set_measurement_frequency`, `#set_measurement_freq`, `#set_frequency`,
 `#set_sample_rate`, `#set_output_rate` and `#set_measurement_rate` are all
-silently ignored (value unchanged, stream unchanged). *Averaging frames* is
-the supported rate-related knob.
+silently ignored (value unchanged, stream unchanged). The read-back check
+will therefore report `FAILED` with *"device accepted the command but the
+value did not change"*. *Averaging frames* is the supported rate-related
+knob.
 
 ---
 
@@ -703,13 +731,13 @@ Commands are ASCII, terminated with `\r\n`, and answered on the same port:
 
 ## Settings available on the device
 
-Documented commands (manual 7.2). Only two are exposed in the TUI so far; the
+Documented commands (manual 7.2). Six are exposed in the TUI set dialog; the
 rest can be sent manually once a raw-command prompt exists, or with the
 Geolux Instrument Configurator.
 
 | Command | Values | Risk |
 |---|---|---|
-| `#set_deadzone_min=<v>` / `#set_deadzone_max=<v>` | in the current unit | **useful**: limits the active zone; the default `15.0` allows phantom 15 m / SNR 0 readings |
+| `#set_deadzone_min=<v>` / `#set_deadzone_max=<v>` | in the current unit | **useful**: limits the active zone; the default `15.0` allows phantom 15 m / SNR 0 readings (both exposed) |
 | `#set_filter_type=0..4` | 0 none, 1 IIR, 2 moving average, 3 median, 4 std-dev | safe |
 | `#set_frame_number=<1..1000>` | averaging length | safe (exposed) |
 | `#set_IR_constant=<0..1>` | IIR constant | safe |
@@ -862,11 +890,14 @@ of `geolux_tui.py`:
 
 * POSIX only (`curses`, `termios`); on Windows use WSL2 (see above).
 * Installed with mamba/conda-forge; pip is not a supported install method.
-* Only two parameters are editable from the TUI so far; the rest of the
+* Six parameters are editable from the TUI (sensor height, level offset, dead
+  zone min/max, measurement frequency, averaging frames); the rest of the
   documented settings need a raw-command prompt or the vendor application.
 * `#set_baud_rate`, `#set_sdi_sleep` and `#factory_reset` are deliberately
   **not** exposed, because a mistake can strand the link.
-* The measurement/output rate cannot be changed (firmware).
+* The measurement/output rate cannot be changed on the tested firmware; the
+  command is exposed only so the read-back check can show that the device
+  ignores it.
 * `plot_radar.py --live` relies on a Bokeh server; the static HTML mode is
   enough for reviewing a finished capture.
 

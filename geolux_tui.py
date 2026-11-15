@@ -108,6 +108,22 @@ PARAMS = (
         "note": "shifts the reported distance (level = sensor_height - distance)",
     },
     {
+        "key": "deadzone_min", "label": "Dead zone min", "info": "deadzone_min",
+        "lo_m": 0.0, "hi_m": 100.0, "is_int": False, "unit": True,
+        "note": "near-field cutoff; echoes closer than this are ignored",
+    },
+    {
+        "key": "deadzone_max", "label": "Dead zone max", "info": "deadzone_max",
+        "lo_m": 0.0, "hi_m": 100.0, "is_int": False, "unit": True,
+        "note": "far-field cutoff; stops phantom echoes at level_range",
+    },
+    {
+        "key": "measurement_frequency", "label": "Measurement freq.",
+        "info": "measurement_frequency",
+        "lo": 0.1, "hi": 1000.0, "is_int": False, "unit": False,
+        "note": "output rate in Hz; the tested firmware ignores this write",
+    },
+    {
         "key": "frame_number", "label": "Averaging frames", "info": "averaging_frame_number",
         "lo": 1, "hi": 1000, "is_int": True, "unit": False,
         "note": "samples averaged; output rate stays at measurement_frequency",
@@ -929,7 +945,8 @@ def draw_info_panel(stdscr, info: dict, h, w, stats=None, snapshot_path=None,
                     csum=None, color_for=None, probe_enabled=True):
     """Full-screen view of the device settings block."""
     addstr(stdscr, 0, 0,
-           " Device settings (#get_info) - g: refresh   i/Esc: close ".ljust(w - 1)[: w - 1],
+           " Device settings (#get_info) - g: refresh   i/Esc: close   ?: help "
+           .ljust(w - 1)[: w - 1],
            curses.A_REVERSE)
 
     footer_lines = []
@@ -1017,10 +1034,19 @@ def draw_set_dialog(stdscr, h, w, dlg, meta, info, link_job):
     iw = box_w - 4
 
     if phase == "select":
+        rows = max(1, box_h - 6)
+        top = dlg.get("top", 0)
+        if dlg["index"] < top:
+            top = dlg["index"]
+        elif dlg["index"] >= top + rows:
+            top = dlg["index"] - rows + 1
+        top = max(0, min(top, max(0, len(params) - rows)))
+        dlg["top"] = top
         addstr(stdscr, y0 + 2, x0 + 2, f"{'parameter':<26}{'current':<10}"[:iw],
                curses.A_DIM)
-        for idx, param in enumerate(params):
-            y = y0 + 3 + idx
+        for row, param in enumerate(params[top:top + rows]):
+            idx = top + row
+            y = y0 + 3 + row
             sel = idx == dlg["index"]
             label = param_label(param, meta["units"])
             cur = param_current(param, info)
@@ -1029,8 +1055,9 @@ def draw_set_dialog(stdscr, h, w, dlg, meta, info, link_job):
                    curses.A_REVERSE if sel else 0)
         hint = " j/k or arrows: choose   Enter: edit   Esc: cancel "
         addstr(stdscr, y0 + box_h - 2, x0 + 2, hint[:iw], curses.A_DIM)
-        note = PARAMS[dlg["index"]].get("note", "")
-        addstr(stdscr, y0 + box_h - 3, x0 + 2, note[:iw], curses.A_DIM)
+        if box_h >= 7:                   # no room for a note on an 8-line screen
+            note = PARAMS[dlg["index"]].get("note", "")
+            addstr(stdscr, y0 + box_h - 3, x0 + 2, note[:iw], curses.A_DIM)
 
     elif phase == "value":
         param = params[dlg["index"]]
@@ -1076,6 +1103,65 @@ def draw_set_dialog(stdscr, h, w, dlg, meta, info, link_job):
                (" Esc: close " if phase == "result" else " please wait ")[:iw], curses.A_DIM)
 
 
+HELP_TEXT = """\
+ Geolux LX-80 radar level meter - live TUI
+
+ WHAT IT DOES
+   Reads the $LVX / $ANG NMEA stream from the LX-80 over RS-232 and shows
+   distance, level, temperature, SNR, standard deviation and tilt as cards.
+   Every frame is logged to CSV.  #get_info probes (default every 10 s)
+   prove that the host transmit line reaches the device: that is the TX
+   probe tally on line 2.
+
+ KEYS
+   q        quit
+   p        pause / resume CSV logging (probing continues)
+   f        freeze the display (values and raw line)
+   s        set a device parameter (dialog)
+   i        device settings panel (the whole #get_info block)
+   g        probe now / refresh the settings
+   c        reset the checksum counters
+   ?  h     this help (j/k scroll, ? or Esc closes)
+   Esc      close a panel or dialog
+
+ SET DIALOG (s)
+   j/k or arrows   choose a parameter    Enter   edit / apply
+   Esc             back / cancel        0-9 . - +  type the value
+   The value is checked locally, then sent as #set_<param>=<value>.
+   The device ack and the #get_info read-back (old -> new) are shown, and
+   OK is only reported when the read-back matches.
+
+ FILES (in -d DIR, default data/YYYY-MMDD, one directory per day)
+   <stamp>-radar.txt        CSV, one row per measurement frame
+   <stamp>-radar-cmd.log    CSV, one row per command / probe
+   <stamp>-radar-info.txt   device settings snapshot
+
+   ./geolux_tui.py --help shows all options, examples and firmware notes.
+"""
+
+
+def draw_help(stdscr, h, w, offset=0):
+    """Full-screen help overlay; returns the clamped scroll offset."""
+    stdscr.erase()
+    addstr(stdscr, 0, 0,
+           " Geolux LX-80 help - ?/Esc: close   j/k: scroll ".ljust(w - 1)[: w - 1],
+           curses.A_REVERSE)
+    body = HELP_TEXT.splitlines()
+    area = max(1, h - 2)
+    offset = max(0, min(offset, max(0, len(body) - area)))
+    for i, line in enumerate(body[offset:offset + area]):
+        attr = curses.A_BOLD if line.startswith(" ") and line[1:2].isupper() \
+            else curses.A_NORMAL
+        addstr(stdscr, 1 + i, 1, line[: w - 2], attr)
+    if len(body) > area:
+        addstr(stdscr, h - 1, 1,
+               f" {offset + 1}-{min(len(body), offset + area)}/{len(body)}"
+               "  j/k: scroll "[: w - 2], curses.A_DIM)
+    stdscr.noutrefresh()
+    curses.doupdate()
+    return offset
+
+
 def draw(stdscr, shared: SharedState, meta, recorder, view):
     snap = shared.snapshot()
     if not snap["frozen"]:
@@ -1090,6 +1176,10 @@ def draw(stdscr, shared: SharedState, meta, recorder, view):
         addstr(stdscr, 0, 0, "terminal too small")
         stdscr.noutrefresh()
         curses.doupdate()
+        return
+
+    if view.get("show_help"):
+        view["help_offset"] = draw_help(stdscr, h, w, view.get("help_offset", 0))
         return
 
     if view.get("show_info"):
@@ -1178,7 +1268,7 @@ def draw(stdscr, shared: SharedState, meta, recorder, view):
     raw = view["raw"][: max(0, w - 3)]
     addstr(stdscr, h - 2, 0, f" {raw}"[: w - 1], curses.A_DIM)
 
-    keys = " q quit  p pause log  f freeze  s set  i settings  g refresh "
+    keys = " q quit  p pause log  f freeze  s set  i settings  g refresh  ? help "
     addstr(stdscr, h - 1, 0, keys.ljust(w - 1)[: w - 1], curses.A_REVERSE)
 
     if view.get("dialog"):
@@ -1195,10 +1285,31 @@ def run_tui(stdscr, shared: SharedState, meta, recorder, link):
     stdscr.timeout(100)
     init_colors()
     view = {"values": {}, "raw": "", "box": box_chars(), "show_info": False,
-            "info": {}, "link": {}, "dialog": None}
+            "info": {}, "link": {}, "dialog": None,
+            "show_help": False, "help_offset": 0}
 
     while True:
         ch = stdscr.getch()
+
+        # ---- modal help overlay ----
+        if view.get("show_help"):
+            if ch in (27, ord("?"), ord("h"), ord("H")):
+                view["show_help"] = False
+                view["help_offset"] = 0
+            elif ch in (curses.KEY_DOWN, ord("j")):
+                view["help_offset"] = view.get("help_offset", 0) + 1
+            elif ch in (curses.KEY_UP, ord("k")):
+                view["help_offset"] = max(0, view.get("help_offset", 0) - 1)
+            elif ch == curses.KEY_NPAGE:
+                view["help_offset"] = view.get("help_offset", 0) + 10
+            elif ch == curses.KEY_PPAGE:
+                view["help_offset"] = max(0, view.get("help_offset", 0) - 10)
+            elif ch in (ord("q"), ord("Q")):
+                break
+            draw(stdscr, shared, meta, recorder, view)
+            if meta["duration"] and time.time() - shared.start >= meta["duration"]:
+                break
+            continue
 
         # ---- modal set-parameter dialog ----
         dlg = view["dialog"]
@@ -1268,6 +1379,9 @@ def run_tui(stdscr, shared: SharedState, meta, recorder, link):
             shared.reset_counters()
         elif ch in (ord("g"), ord("G")) and link is not None:
             link.request_probe()
+        elif ch in (ord("?"), ord("h"), ord("H")):
+            view["show_help"] = True
+            view["help_offset"] = 0
 
         if link is not None:
             view["link"] = link.snapshot()
@@ -1353,7 +1467,8 @@ tui keys:
   q  quit                    p  pause / resume CSV logging
   f  freeze the display      s  set a device parameter (dialog)
   i  device settings panel   g  refresh settings (#get_info now)
-  c  reset the counters      Esc close a panel or dialog
+  c  reset the counters      ?  key overview and help (h works too)
+  Esc close a panel or dialog
 
   The set dialog (s) is a single "set" command: pick the parameter from the
   dropdown with j/k or the arrow keys, Enter to edit, type the value, Enter
@@ -1386,20 +1501,27 @@ tx probe and link health:
   program starts: a run that crosses midnight keeps writing to its own date.
 
 settable parameters (single "set" dialog):
-  Sensor height     #set_sensor_height=<value>   height above the gauge zero
-  Level offset      #set_level_offset=<value>    small correction, same unit
-  Averaging frames  #set_frame_number=<1..1000>  number of 10 Hz samples
+  Sensor height     #set_sensor_height=<value>      gauge-zero datum
+  Level offset      #set_level_offset=<value>       level correction
+  Dead zone min/max #set_deadzone_min/max=<value>   near/far cutoffs
+  Measurement freq. #set_measurement_frequency=<Hz> output rate in Hz
+  Averaging frames  #set_frame_number=<1..1000>     samples per output
 
   Sensor height defines the datum: level = sensor_height - distance, so
   raising it raises every reported level by the same amount and leaves the
   distance readings alone.  Ranges are checked in the device's own unit
-  (sensor height 0..100 m on a metric unit, i.e. 0..100000 when the device is
-  configured in mm).
+  (sensor height and dead zone 0..100 m on a metric unit, i.e. 0..100000
+  when the device is configured in mm).
 
-  The measurement/output rate itself (measurement_frequency, 10 Hz on the unit
-  tested) cannot be changed: it is not in the manual's command list and the
-  plausible command names are silently ignored.  Averaging frames is the
-  supported rate-related knob.
+  Dead zone min/max are the near and far cutoffs of the measuring window.
+  The default max (15.0) lets phantom echoes at level_range through, so a
+  max of 5-10 m is usually better.  Averaging frames sets how many samples
+  are averaged into one output; the output rate stays at
+  measurement_frequency.
+
+  measurement_frequency is exposed for completeness only: on the firmware
+  tested (2.5.4) the device ignores #set_measurement_frequency, so the
+  read-back check reports FAILED and the rate stays at 10 Hz.
 
 firmware notes (verified on firmware 2.5.4):
   * #set_level_offset shifts the reported distance, so the level moves the
