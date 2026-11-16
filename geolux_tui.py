@@ -17,7 +17,7 @@ periodically and keeps a running tally of successful probes.
 Every card shows the title above the value.  The actual ("real") distance
 (L1) is logged with the capture time to a gzipped CSV file named
 
-    YYYY-MMDD-HHMMSS-radar.txt.gz
+    YYYY-MMDD-HHMMSS-<serial>-radar.txt.gz
 
 alongside <stamp>-radar-cmd.log.gz (probe history) and
 <stamp>-radar-info.txt.gz (device settings snapshot).
@@ -70,6 +70,21 @@ def default_log_dir(now=None) -> str:
     """Default log directory for today: data/YYYY-MMDD (created if missing)."""
     now = now or dt.datetime.now()
     return os.path.join(DATA_ROOT, now.strftime(DATE_DIR_FORMAT))
+
+
+def make_stamp(now=None, serial=None) -> str:
+    """File-name root: YYYY-MMDD-HHMMSS[-<serial>].
+
+    The unit's serial number is appended when it is known (from #get_info),
+    so files from different instruments cannot be mixed up.  Characters that
+    are unsafe in a file name are replaced with '_'.
+    """
+    base = (now or dt.datetime.now()).strftime("%Y-%m%d-%H%M%S")
+    serial = "".join(ch if (ch.isalnum() or ch in "-_") else "_"
+                     for ch in str(serial or "").strip())
+    return f"{base}-{serial}" if serial else base
+
+
 GET_INFO = "#get_info"
 FACTORY_RESET = "#factory_reset"      # erases settings, needs a power cycle
 DEVICE_REBOOT = "#reset"              # undocumented: reboots, keeps settings
@@ -1363,7 +1378,8 @@ HELP_TEXT = f"""\
  NEW FILE (n)
    Closes the current recording and starts a fresh set of files without
    leaving the TUI.  The prompt is preloaded with the same naming scheme as
-   the start-up file (YYYY-MMDD-HHMMSS, the current time); edit it or press
+   the start-up file (YYYY-MMDD-HHMMSS-<serial>, current time + device
+   serial number); edit it or press
    Enter to accept, Ctrl-U clears the field, Esc cancels.  The probe log and
    the settings snapshot are renamed with the same stamp.
 
@@ -1850,10 +1866,9 @@ def run_tui(stdscr, shared: SharedState, meta, recorder, link):
             view["confirm"] = {"action": "reboot", "phase": "sure"}
             view["show_info"] = False
         elif ch in (ord("n"), ord("N")):
-            view["newfile"] = {
-                "buffer": dt.datetime.now().strftime("%Y-%m%d-%H%M%S"),
-                "error": None,
-            }
+            serial = ((view.get("link") or {}).get("info", {}).get("serial_number")
+                      or meta.get("serial"))
+            view["newfile"] = {"buffer": make_stamp(serial=serial), "error": None}
             view["show_info"] = False
         elif ch in (ord("i"), ord("I")):
             view["show_info"] = not view["show_info"]
@@ -1963,7 +1978,7 @@ tui keys:
   only reported as OK when the read-back matches.
 
 files (all in --dir, default ./data/YYYY-MMDD - one directory per day - and
-sharing one YYYY-MMDD-HHMMSS stamp; every file is gzip-compressed):
+sharing one YYYY-MMDD-HHMMSS-<serial> stamp; gzip-compressed):
   <stamp>-radar.txt.gz       CSV, one row per measurement frame
   <stamp>-radar-cmd.log.gz   CSV, one row per command/probe
   <stamp>-radar-info.txt.gz  device settings snapshot (# key:value format)
@@ -1973,8 +1988,8 @@ sharing one YYYY-MMDD-HHMMSS stamp; every file is gzip-compressed):
     snr_db, temperature_c, raw_sentence
 
   n starts a new set without restarting: the prompt is preloaded with the
-  current time in the same YYYY-MMDD-HHMMSS form, so pressing Enter continues
-  the naming scheme.  Ctrl-U clears the field; the probe log and settings
+  current time in the same YYYY-MMDD-HHMMSS-<serial> form (the serial comes
+  from #get_info), so pressing Enter continues the naming scheme.  Ctrl-U clears the field; the probe log and settings
   snapshot follow the new stamp.
 
 tx probe and link health:
@@ -2150,7 +2165,7 @@ def main(argv=None):
 
     shared = SharedState()
     log_dir = ensure_dir(args.dir)
-    stamp = dt.datetime.now().strftime("%Y-%m%d-%H%M%S")  # YYYY-MMDD-HHMMSS
+    stamp = make_stamp(serial=info.get("serial_number"))  # YYYY-MMDD-HHMMSS[-serial]
     recorder = None if args.no_log else Recorder(log_dir, units, stamp)
     cmd_log = None
     snapshot_path = None
@@ -2170,6 +2185,7 @@ def main(argv=None):
         "duration": args.duration,
         "snapshot_path": snapshot_path,
         "log_dir": log_dir,
+        "serial": info.get("serial_number"),
         "probe_enabled": not args.no_probe,
     }
 

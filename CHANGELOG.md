@@ -4,6 +4,15 @@ All notable changes to this project.  The version lives in `version.py` and
 is shown by `--version`, in the TUI header and help overlay, and in every
 plot.  Tags are named `vX.Y.Z`.
 
+## 1.5.0 - 2026-11-15
+
+* **Device serial in the file names**: the stamp is now
+  `YYYY-MMDD-HHMMSS-<serial>` (e.g. `2026-1115-192030-102181`), using
+  `serial_number` from `#get_info`, so files from different instruments cannot
+  be confused.  The `n` prompt is preloaded with the same form.  If probing is
+  off or the unit has not answered, the serial part is omitted.  Logs recorded
+  before 1.5.0 keep their old names.
+
 ## 1.4.0 - 2026-11-15
 
 * **New-file command** (`n`): closes the current recording and starts a fresh

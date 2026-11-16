@@ -2,7 +2,7 @@
 
 2026-1014 W. Wright github.com/lidar532
 
-Version **1.4.0** (`version.py`, git tag `v1.4.0`). The version is shown by
+Version **1.5.0** (`version.py`, git tag `v1.5.0`). The version is shown by
 `--version` in both programs, in the TUI header and help overlay, and in the
 title and summary banner of every plot; see [CHANGELOG.md](CHANGELOG.md) for
 what changed in each release.  The repository URL
@@ -256,7 +256,7 @@ adapter's transmit line reaches the device:
 
 ```
  Geolux LX-80 │ /dev/ttyUSB0 @ 115200 8N1 │ LIVE │ 9.6 Hz │ 37 frames · 0.1s ago
- log: /tmp/radar/2026-1114-151137-radar.txt.gz (37 rows)  ·  TX probe 1/1 ok (100%) · 48 ms
+ log: /tmp/radar/2026-1114-151137-102181-radar.txt.gz (37 rows)  ·  TX probe 1/1 ok (100%) · 48 ms
 ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
 │ Actual distance      │ │ Average distance     │ │ Level                │
 │ 3.58 m               │ │ 3.58 m               │ │ 6.42 m               │
@@ -411,7 +411,7 @@ cd ~/github-projects/geolux-radar && ./geolux_tui.py
 
 ```
  Geolux LX-80 │ /dev/ttyUSB0 @ 115200 8N1 │ LIVE │ 9.6 Hz │ 37 frames · 0.1s ago
- log: data/2026-1114/2026-1114-141157-radar.txt.gz (37 rows)  ·  TX probe 7/7 ok (100%) · 48 ms
+ log: data/2026-1114/2026-1114-141157-102181-radar.txt.gz (37 rows)  ·  TX probe 7/7 ok (100%) · 48 ms
 ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
 │ Actual distance      │ │ Average distance     │ │ Level                │
 │ 3.58 m               │ │ 3.58 m               │ │ 6.42 m               │
@@ -521,21 +521,27 @@ Exit status: `0` normal, `2` port could not be opened / pyserial missing.
 ## Files written
 
 All three files are **gzip-compressed** (`gzip -dc FILE` to read one, or
-`zcat FILE | less`) and share one `YYYY-MMDD-HHMMSS` stamp.  They are written
-to `--dir`.
+`zcat FILE | less`) and share one `YYYY-MMDD-HHMMSS-<serial>` stamp, where
+`<serial>` is the instrument's `serial_number` from `#get_info` (omitted when
+probing is disabled or the unit has not answered yet).  They are written to
+`--dir`.
 
 The default is **`./data/<YYYY-MMDD>`** — one directory per day, created on
 start-up if it does not exist (e.g. `data/2026-1114` for 14 November 2026).
 The directory is chosen once at start-up, so a run that crosses midnight keeps
 writing to the directory it began in.  Give `-d` to write somewhere else
 (`-d ~/radar-logs`, `-d /mnt/d/radar`, or `-d .` for the current directory).
-For example a session started on 14 November 2026 at 14:11:57 produces:
+For example a session started on 14 November 2026 at 14:11:57 on the test
+unit (serial 102181) produces:
 
 | File | Content |
 |---|---|
-| `data/2026-1114/2026-1114-141157-radar.txt.gz` | gzipped CSV, one row per measurement frame |
-| `data/2026-1114/2026-1114-141157-radar-cmd.log.gz` | gzipped CSV, one row per probe / command |
-| `data/2026-1114/2026-1114-141157-radar-info.txt.gz` | gzipped device settings snapshot |
+| `data/2026-1114/2026-1114-141157-102181-radar.txt.gz` | gzipped CSV, one row per measurement frame |
+| `data/2026-1114/2026-1114-141157-102181-radar-cmd.log.gz` | gzipped CSV, one row per probe / command |
+| `data/2026-1114/2026-1114-141157-102181-radar-info.txt.gz` | gzipped device settings snapshot |
+
+Here `<stamp>` is `YYYY-MMDD-HHMMSS-<serial>`, e.g. `2026-1114-141157-102181`.
+Captures recorded before 1.5.0 have no `-<serial>` part.
 
 ### `<stamp>-radar.txt.gz`
 
@@ -933,8 +939,9 @@ without leaving the TUI:
 └───────────────────────────────────────────────────────────────┘
 ```
 
-* The field is **preloaded** with the same `YYYY-MMDD-HHMMSS` stamp used for
-  the run's initial files (taken at the moment you press `n`), so pressing
+* The field is **preloaded** with the same `YYYY-MMDD-HHMMSS-<serial>` stamp
+  used for the run's initial files (current time plus the device serial from
+  `#get_info`, taken at the moment you press `n`), so pressing
   `Enter` simply continues the naming scheme.
 * Edit the name freely (`A-Z a-z 0-9 - _ .`); a pasted file name such as
   `2026-1115-173015-radar.txt.gz` is reduced to its stamp.  `Ctrl-U` clears
