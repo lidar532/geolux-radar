@@ -23,7 +23,7 @@ plots while geolux_tui.py keeps appending to it:
 
 Plain (uncompressed) logs from older runs are read as well.
 
-Requires: pip install bokeh
+Requires: bokeh and numpy (installed with mamba from environment.yml).
 """
 
 from __future__ import annotations
@@ -34,26 +34,81 @@ import datetime as dt
 import glob
 import io
 import os
+import shutil
 import statistics
+import subprocess
 import sys
-import webbrowser
 import zlib
+
+
+def _project_venv_python():
+    return os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                        ".venv", "bin", "python")
+
+
+def _reexec_with_project_venv():
+    """Restart with the checkout's .venv when the current Python is incomplete."""
+    venv_python = _project_venv_python()
+    venv_dir = os.path.dirname(os.path.dirname(venv_python))
+    if not os.path.isfile(venv_python):
+        return False
+    if os.path.abspath(sys.prefix) == os.path.abspath(venv_dir):
+        return False
+    os.execv(venv_python, [venv_python, os.path.realpath(__file__), *sys.argv[1:]])
+    return True
+
+
+try:
+    import numpy as np
+except ModuleNotFoundError as exc:
+    if not _reexec_with_project_venv():
+        raise SystemExit(
+            "plot_radar.py needs numpy for the FFT panel.\n"
+            "Create the project-local virtual environment with:\n"
+            "  /usr/bin/python3 -m venv .venv\n"
+            "  ./.venv/bin/python -m pip install -r requirements.txt\n"
+            "or refresh a mamba environment with:\n"
+            "  mamba env update -n radar -f environment.yml --prune"
+        ) from exc
 
 from version import REPO_URL, VERSION
 
-from bokeh.io import output_file, save
-from bokeh.resources import INLINE
-from bokeh.layouts import column, gridplot
-from bokeh.models import ColumnDataSource, Div, HoverTool, Span
-from bokeh.plotting import figure
+try:
+    from bokeh.io import output_file, save
+    from bokeh.resources import INLINE
+    from bokeh.layouts import column, gridplot
+    from bokeh.models import ColumnDataSource, Div, HoverTool, Span
+    from bokeh.plotting import figure
+except ModuleNotFoundError as exc:
+    if not _reexec_with_project_venv():
+        raise SystemExit(
+            "plot_radar.py needs bokeh and numpy for the plots.\n"
+            "Create the project-local virtual environment with:\n"
+            "  /usr/bin/python3 -m venv .venv\n"
+            "  ./.venv/bin/python -m pip install -r requirements.txt\n"
+            "or refresh a mamba environment with:\n"
+            "  mamba env update -n radar -f environment.yml --prune"
+        ) from exc
 
 C_ACTUAL = "#1f77b4"
 C_AVERAGE = "#ff7f0e"
 C_SNR = "#9467bd"
 C_TEMP = "#2ca02c"
+C_SPECTRUM = "#8c564b"
 C_WARN = "#d62728"
 
 TOOLS = "pan,wheel_zoom,box_zoom,undo,redo,reset,save"
+
+# The L1 FFT is computed after resampling onto a uniform grid.  A cap keeps
+# very long (or gap-ridden) logs from allocating an enormous array.
+SPECTRUM_MAX_SAMPLES = 1 << 17
+
+# The LX-80 reports 15.000 as its no-echo sentinel: the raw amplitude drops to
+# -4.743 and the sample would put a broadband spike into the FFT.  This is the
+# default missing value for the spectrum; --remove-missing can replace it and
+# also applies the filter to the time plots.
+L1_SPIKE_VALUE = 15.0
+SPIKE_TOLERANCE = 1e-9
 
 
 # --------------------------------------------------------------------------
@@ -202,6 +257,55 @@ def default_output(path: str) -> str:
     return os.path.splitext(base)[0] + "-plot.html"
 
 
+def open_html(path: str) -> bool:
+    """Open *path* with the desktop browser; return True if one was launched.
+
+    On WSL the Windows default browser is preferred (``wslview`` or
+    ``cmd.exe start``); otherwise the usual Linux/macOS openers are tried.
+    Output is discarded so a missing handler produces a clean fallback
+    message instead of a gio/xdg-open error.
+    """
+    path = os.path.abspath(path)
+    url = "file://" + path
+    candidates = []
+
+    wsl = bool(os.environ.get("WSL_DISTRO_NAME")) or (
+        hasattr(os, "uname") and "microsoft" in os.uname().release.lower()
+    )
+    if wsl:
+        if shutil.which("wslview"):
+            candidates.append(["wslview", path])
+        if shutil.which("wslpath") and shutil.which("cmd.exe"):
+            try:
+                win_path = subprocess.check_output(
+                    ["wslpath", "-w", path], text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+            except (OSError, subprocess.SubprocessError):
+                win_path = ""
+            if win_path:
+                candidates.append(["cmd.exe", "/c", "start", "", win_path])
+
+    if shutil.which("xdg-open"):
+        candidates.append(["xdg-open", url])
+    if shutil.which("gio"):
+        candidates.append(["gio", "open", url])
+    if sys.platform == "darwin":
+        candidates.append(["open", path])
+
+    for command in candidates:
+        try:
+            result = subprocess.run(
+                command, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode == 0:
+            return True
+    return False
+
+
 def detect_units(path: str) -> str:
     """Read the distance unit from the CSV header ('actual_distance_m')."""
     with open_log(path) as fh:
@@ -269,13 +373,33 @@ def _parse_row(rec, cols):
     }
 
 
-def load_rows(path: str, max_points: int = 0) -> list[dict]:
+def is_missing_value(value, missing_values) -> bool:
+    """True if *value* matches one of the requested missing sentinels."""
+    return value is not None and any(
+        abs(value - target) <= SPIKE_TOLERANCE for target in missing_values
+    )
+
+
+def is_missing_l1(row, missing_values=(L1_SPIKE_VALUE,)) -> bool:
+    """True if the row's L1 distance matches a missing sentinel."""
+    return is_missing_value(row.get("dist"), missing_values)
+
+
+def drop_missing_rows(rows, missing_values):
+    """Drop rows whose L1 distance matches one of the missing sentinels."""
+    return [row for row in rows if not is_missing_l1(row, missing_values)]
+
+
+def load_rows(path: str, max_points: int = 0,
+              missing_values=()) -> list[dict]:
     cols = column_map(path)
     with open_log(path) as fh:
         rows = []
         for rec in csv.DictReader(fh):
             row = _parse_row(rec, cols)
             if row is not None:
+                if missing_values and is_missing_l1(row, missing_values):
+                    continue
                 rows.append(row)
 
     if max_points and len(rows) > max_points:
@@ -376,6 +500,83 @@ def to_columns(rows):
     }
 
 
+def power_spectrum(data, max_samples=SPECTRUM_MAX_SAMPLES,
+                   missing_values=(L1_SPIKE_VALUE,)):
+    """One-sided power spectrum of the L1 (actual distance) series.
+
+    The LX-80 reports at an irregular ~10 Hz, so the samples are linearly
+    resampled onto a uniform grid using the median sampling interval before
+    the FFT.  Samples matching *missing_values* (the 15.000 no-echo sentinel
+    by default) are dropped first, then a least-squares line is removed (not
+    just the mean) to suppress the DC bin and the slow baseline drift that
+    would otherwise leak into the lowest frequency bins; a Hann window reduces
+    the remaining leakage.  Returning the log10 power directly keeps the
+    Bokeh panel a plain linear axis (and avoids non-positive values on a log
+    axis).
+
+    Returns a dict of column lists (freq, power, amplitude, log10_power) that
+    can be used directly as a ColumnDataSource.
+    """
+    empty = {"freq": [], "power": [], "amplitude": [], "log10_power": []}
+    pairs = [(t, v) for t, v in zip(data.get("t") or (), data.get("dist") or ())
+             if t is not None and v is not None
+             and not is_missing_value(v, missing_values)]
+    if len(pairs) < 4:
+        return empty
+
+    t = np.asarray([p[0].timestamp() for p in pairs], dtype=float)
+    x = np.asarray([p[1] for p in pairs], dtype=float)
+    order = np.argsort(t)
+    t, x = t[order], x[order]
+
+    dt = np.diff(t)
+    dt = dt[dt > 0]
+    if not dt.size:
+        return empty
+    step = float(np.median(dt))
+    span = float(t[-1] - t[0])
+    if not np.isfinite(step) or step <= 0 or span <= 0:
+        return empty
+
+    n = max(4, int(round(span / step)) + 1)
+    n = min(n, max_samples)
+    step = span / (n - 1)           # grid spacing after the sample cap
+    grid = t[0] + np.arange(n) * step
+    y = np.interp(grid, t, x)
+
+    # Remove the best-fit line, not only the mean.  The centred coordinate
+    # keeps the normal equations well conditioned for long captures.
+    u = np.linspace(-0.5, 0.5, n)
+    slope, offset = np.polyfit(u, y, 1)
+    y = y - (slope * u + offset)
+
+    win = np.hanning(n)
+    spectrum = np.fft.rfft(y * win)
+    freqs = np.fft.rfftfreq(n, d=step)
+
+    # One-sided peak amplitude for a real signal, corrected for the Hann
+    # window's coherent gain; power is amplitude squared.
+    amplitude = 2.0 * np.abs(spectrum) / np.sum(win)
+    power = amplitude ** 2
+
+    # Drop the DC bin: the mean and linear trend are already removed and
+    # log10(0) is undefined.
+    freqs, amplitude, power = freqs[1:], amplitude[1:], power[1:]
+    if not power.size:
+        return empty
+
+    peak = float(np.max(power))
+    floor = max(peak * 1e-12, 1e-30) if peak > 0 else 1e-30
+    power = np.maximum(power, floor)
+
+    return {
+        "freq": freqs.tolist(),
+        "power": power.tolist(),
+        "amplitude": amplitude.tolist(),
+        "log10_power": np.log10(power).tolist(),
+    }
+
+
 # --------------------------------------------------------------------------
 # summary banner
 # --------------------------------------------------------------------------
@@ -415,7 +616,8 @@ def stats_html(path, data, units, total=None, decimated=False):
 # --------------------------------------------------------------------------
 # figures
 # --------------------------------------------------------------------------
-def build_layout(source, units, title, subtitle):
+def build_layout(source, units, title, subtitle, spectrum=None,
+                 spectrum_scale="linear"):
     p_dist = figure(
         height=380,
         title=title,
@@ -449,13 +651,14 @@ def build_layout(source, units, title, subtitle):
             mode="vline",
         )
     )
+    p_dist.toolbar.active_inspect = None      # hover off until selected
 
     p_snr = figure(
         height=170,
         x_axis_type="datetime",
         x_range=p_dist.x_range,
         tools=TOOLS,
-        toolbar_location=None,
+        toolbar_location="above",
         active_scroll="wheel_zoom",
         sizing_mode="stretch_width",
     )
@@ -479,13 +682,14 @@ def build_layout(source, units, title, subtitle):
             mode="vline",
         )
     )
+    p_snr.toolbar.active_inspect = None       # hover off until selected
 
     p_temp = figure(
         height=170,
         x_axis_type="datetime",
         x_range=p_dist.x_range,
         tools=TOOLS,
-        toolbar_location=None,
+        toolbar_location="above",
         active_scroll="wheel_zoom",
         sizing_mode="stretch_width",
     )
@@ -505,14 +709,48 @@ def build_layout(source, units, title, subtitle):
             mode="vline",
         )
     )
+    p_temp.toolbar.active_inspect = None      # hover off until selected
 
-    # Toolbars are not merged: with merge_tools=True the shared toolbar holds
-    # ToolProxy objects, and Bokeh cannot pre-activate a scroll tool through a
-    # proxy, so wheel zoom would start out inert.  Keeping one toolbar on the
-    # distance panel and hidden (but live) toolbars on the linked panels makes
-    # wheel zoom active everywhere from load.
+    if spectrum is None:
+        spectrum = ColumnDataSource(power_spectrum({}))
+    log_scale = spectrum_scale == "log"
+    p_fft = figure(
+        height=260,
+        title="L1 power spectrum (linear detrend, Hann-windowed)",
+        x_axis_label="Frequency (Hz)",
+        y_axis_type="log" if log_scale else "linear",
+        y_axis_label=f"Power ({units}\u00b2)" + (" - log scale" if log_scale else ""),
+        tools=TOOLS,
+        toolbar_location="above",
+        active_scroll="wheel_zoom",
+        sizing_mode="stretch_width",
+    )
+    p_fft.line("freq", "power", source=spectrum, color=C_SPECTRUM,
+               line_width=1.5, legend_label="L1 power")
+    p_fft.scatter("freq", "power", source=spectrum, color=C_SPECTRUM,
+                  size=3, alpha=0.65, legend_label="L1 power points")
+    p_fft.legend.location = "top_right"
+    p_fft.legend.click_policy = "hide"
+    p_fft.legend.background_fill_alpha = 0.7
+    p_fft.add_tools(
+        HoverTool(
+            tooltips=[
+                ("frequency", "@freq{0.0000} Hz"),
+                ("log10 power", "@log10_power{0.00}"),
+                ("amplitude", "@amplitude{0.0000} " + units),
+                ("power", "@power"),
+            ],
+            mode="vline",
+        )
+    )
+    p_fft.toolbar.active_inspect = None       # hover off until selected
+
+    # Each panel keeps its own toolbar so the controls are available where the
+    # user is working.  merge_tools=False avoids ToolProxy objects: Bokeh
+    # cannot pre-activate a scroll tool through a proxy, so wheel zoom would
+    # start out inert.
     grid = gridplot(
-        [[p_dist], [p_snr], [p_temp]],
+        [[p_dist], [p_snr], [p_temp], [p_fft]],
         toolbar_location=None,
         merge_tools=False,
         sizing_mode="stretch_width",
@@ -535,14 +773,20 @@ def build_layout(source, units, title, subtitle):
 # modes
 # --------------------------------------------------------------------------
 def run_static(args, path):
-    rows = load_rows(path, args.max_points)
+    missing_values = tuple(args.remove_missing or ())
+    spectrum_missing = missing_values or (L1_SPIKE_VALUE,)
+    rows = load_rows(path, args.max_points, missing_values)
     if not rows:
         sys.stderr.write(f"no usable samples in {path}\n")
         return 1
     units = detect_units(path)
     decimated = bool(args.max_points) and len(rows) >= args.max_points
 
-    source = ColumnDataSource(to_columns(rows))
+    data = to_columns(rows)
+    source = ColumnDataSource(data)
+    spectrum = ColumnDataSource(
+        power_spectrum(data, missing_values=spectrum_missing)
+    )
     subtitle = Div(text=stats_html(path, source.data, units, decimated=decimated),
                    sizing_mode="stretch_width")
 
@@ -552,7 +796,7 @@ def run_static(args, path):
     layout = build_layout(
         source, units,
         f"Geolux LX-80 radar \u2014 {base}  \u00b7  geolux-radar {VERSION}",
-        subtitle,
+        subtitle, spectrum, args.spectrum_scale,
     )
     if args.inline:                      # embed BokehJS -> works offline
         save(layout, filename=out, title=title, resources=INLINE)
@@ -561,8 +805,8 @@ def run_static(args, path):
         save(layout)
     print(f"wrote {os.path.abspath(out)}  ({len(rows)} samples)")
 
-    if not args.no_open:
-        webbrowser.open("file://" + os.path.abspath(out))
+    if not args.no_open and not open_html(out):
+        print(f"no browser could be launched; open {os.path.abspath(out)}")
     return 0
 
 
@@ -570,10 +814,15 @@ def run_live(args, path):
     from bokeh.server.server import Server
 
     def app(doc):
-        rows = load_rows(path, args.max_points)
+        missing_values = tuple(args.remove_missing or ())
+        spectrum_missing = missing_values or (L1_SPIKE_VALUE,)
+        rows = load_rows(path, args.max_points, missing_values)
         units = detect_units(path)
         cols_data = to_columns(rows)
         source = ColumnDataSource(cols_data)
+        spectrum = ColumnDataSource(
+            power_spectrum(cols_data, missing_values=spectrum_missing)
+        )
         total = {"n": len(rows)}
         subtitle = Div(text=stats_html(path, cols_data, units, total=len(rows)),
                        sizing_mode="stretch_width")
@@ -581,17 +830,22 @@ def run_live(args, path):
             source, units,
             f"Geolux LX-80 radar \u2014 {os.path.basename(path)} (live)"
             f"  \u00b7  geolux-radar {VERSION}",
-            subtitle,
+            subtitle, spectrum, args.spectrum_scale,
         )
         cols = column_map(path)
         state = {"offset": initial_offset(path)}
 
         def tick():
             new_rows, state["offset"] = tail_rows(path, state["offset"], cols)
+            if missing_values:
+                new_rows = drop_missing_rows(new_rows, missing_values)
             if not new_rows:
                 return
             source.stream(to_columns(new_rows), rollover=args.max_points)
             total["n"] += len(new_rows)
+            spectrum.data = power_spectrum(
+                source.data, missing_values=spectrum_missing
+            )
             data = source.data
             keep = min(len(data["t"]), 2000)  # keep the stats cheap
             recent = {k: data[k][len(data["t"]) - keep:] for k in ("t", "dist", "avg", "snr", "temp")}
@@ -624,13 +878,15 @@ def run_live(args, path):
 USAGE_HELP = """\
 plot_radar.py [-h | --help | -? | --version] [FILE] [-o OUTPUT] [--live]
                      [--port PORT] [--interval SEC] [--no-open] [--inline]
-                     [--max-points N]"""
+                     [--max-points N] [--remove-missing VALUE]
+                     [--spectrum-scale {linear,log}]"""
 
 DESCRIPTION_HELP = f"""\
 plot_radar.py {VERSION} - plot Geolux LX-80 radar logs (<stamp>-radar.txt.gz,
 written by geolux_tui.py) with Bokeh.  Three linked panels show distance, SNR
-and instrument temperature against the capture time, with hover tools,
-zoom/pan tools and a summary banner.
+and instrument temperature against the capture time, and a fourth panel shows
+the L1 (actual distance) FFT power spectrum, with a linear or log y axis
+(default linear), plus optional hover tools, zoom/pan tools and a summary banner.
 
 The gzip-compressed logs are decompressed on the fly; plain <stamp>-radar.txt
 logs from older runs are read too.
@@ -649,6 +905,8 @@ examples:
   ./plot_radar.py --live --port 5006                         auto-refreshing Bokeh server
   ./plot_radar.py --live --interval 0.5                      refresh twice per second
   ./plot_radar.py --max-points 20000                         decimate a long log
+  ./plot_radar.py --remove-missing=15.000                    hide L1 = 15.000 missing rows
+  ./plot_radar.py --spectrum-scale log                       log-scale power spectrum
 
 input files:
   gzip-compressed CSV logs written by geolux_tui.py (default directory
@@ -668,26 +926,44 @@ input files:
   number.  Enter selects the newest log and q quits.  With no FILE at all the
   newest log under ./data is used.
 
-panels (x axis linked, one toolbar on the distance panel):
+panels (the three time panels share their x axis; each panel has a toolbar):
   distance     actual (L1, solid, circles) and average (L2, dashed, crosses);
                legend entries L1 line / L1 points / L2 line / L2 points
   SNR          dB, with a dashed reference line at 10 dB (low-echo warning);
                legend entries SNR line / SNR points
   temperature  instrument temperature in degrees Celsius; legend entries
                Temp line / Temp points
+  spectrum     one-sided FFT power spectrum of L1 against frequency (Hz);
+               the y axis is linear power by default, and --spectrum-scale
+               log switches it to a logarithmic power axis.  Legend entries
+               L1 power / L1 power points.  L1 samples at 15.000 (the
+               no-echo sentinel) are dropped first; the irregular ~10 Hz
+               samples are then linearly resampled onto a uniform grid from
+               the median sampling interval.  A least-squares line is removed to suppress
+               the DC and slow baseline drift, and a Hann window is applied
+               before the FFT, so the frequency axis is in Hz.
 
-  Every series is drawn as a line plus markers (size 5-6 px, alpha 0.85) so
-  the data is readable when zoomed in.  Each panel has its own legend with
+  By default the 15.000 L1 no-echo rows are plotted (as spikes in the time
+  panels).  --remove-missing=VALUE drops L1 samples equal to VALUE from all
+  three time panels and from the FFT; repeat the option to remove several
+  values.  With no option the time panels keep every row and the FFT keeps
+  dropping its built-in 15.000 sentinel.
+
+  Every series is drawn as a line plus markers (size 3-6 px, alpha 0.65-0.85)
+  so the data is readable when zoomed in.  Each panel has its own legend with
   click_policy 'hide', and line and points are separate entries, so points
   and lines can be switched on and off independently.
 
-  Mouse-wheel zoom is active by default in all three panels - scroll to zoom,
-  drag to pan, without selecting a tool first.  The toolbar above the distance
-  panel still has box zoom, undo/redo, reset and save.
+  Mouse-wheel zoom is active by default in all four panels - scroll to zoom,
+  drag to pan, without selecting a tool first.  Each panel has its own toolbar
+  above it with box zoom, undo/redo, reset and save.
 
-  A vertical-line hover tool on each panel shows the time and the values at
-  that instant.  The banner above the plots summarises samples, duration,
-  min/median/max distance, median SNR and average temperature.
+  Hover is off by default in every panel.  Click the hover tool in a panel's
+  toolbar to enable it: a vertical-line hover on each time panel then shows
+  the time and the values at that instant, and the spectrum panel's hover
+  shows frequency, log10 power, amplitude and power.  The banner above the
+  plots summarises samples,
+  duration, min/median/max distance, median SNR and average temperature.
 
 live mode:
   --live serves a Bokeh app that tails FILE and streams newly appended rows
@@ -695,6 +971,7 @@ live mode:
   are parsed (a half-written row is never read), and --max-points caps how
   many points stay in memory.  A gzip log is decompressed again on every
   refresh, so the live mode stays correct while the recorder appends rows.
+  --remove-missing=VALUE also filters newly streamed rows in live mode.
 
 install (mamba, not pip):
   mamba env create -f environment.yml    then:  mamba activate radar
@@ -745,6 +1022,15 @@ def parse_args(argv=None):
     ap.add_argument("--max-points", type=int, default=100_000, metavar="N",
                     help="decimate longer logs to N points and cap live points in "
                          "memory (default: %(default)s, 0 = keep all)")
+    ap.add_argument("--remove-missing", "--drop-missing", dest="remove_missing",
+                    action="append", type=float, metavar="VALUE",
+                    help="drop L1 samples equal to VALUE from the time plots "
+                         "and the FFT; repeat the option to remove several "
+                         "values (e.g. --remove-missing=15.000)")
+    ap.add_argument("--spectrum-scale", choices=("linear", "log"),
+                    default="linear",
+                    help="Y-axis scale for the FFT power panel "
+                         "(default: %(default)s)")
     return ap.parse_args(argv)
 
 

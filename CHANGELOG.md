@@ -4,6 +4,30 @@ All notable changes to this project.  The version lives in `version.py` and
 is shown by `--version`, in the TUI header and help overlay, and in every
 plot.  Tags are named `vX.Y.Z`.
 
+## Unreleased
+
+* `plot_radar.py`: new FFT power-spectrum panel for the L1 (actual distance)
+  series.  L1 samples at 15.000 (the no-echo sentinel) are dropped, the
+  irregular ~10 Hz samples are resampled onto a uniform grid (median
+  interval), linearly detrended (removing the DC level and slow baseline
+  drift) and Hann-windowed before the FFT; the panel plots frequency against
+  power, with a linear Y axis by default and a `--spectrum-scale log` option
+  for a logarithmic axis.  It follows the static/live modes and has its own
+  hover tool (frequency, log10 power, amplitude, power); hover is off by
+  default and is enabled from the panel's toolbar.  Every panel now has its
+  own Bokeh toolbar instead of sharing the distance panel's toolbar.  New
+  `--remove-missing=VALUE` (`--drop-missing`) option drops L1 samples equal to
+  VALUE from the time plots and the FFT in both static and live modes; it is
+  repeatable for several sentinels.  Without it the time plots keep every row
+  and the FFT still drops the built-in 15.000 sentinel.  `numpy` is now listed
+  explicitly in the install files, and the README documents a project-local
+  `.venv` fallback for machines where mamba is not available.  `plot_radar.py`
+  automatically re-executes itself with that venv when the starting Python
+  lacks numpy or bokeh, so plain `./plot_radar.py ...` works from the command
+  line.  Static plots now try the Windows browser first under WSL
+  (`wslview`/`cmd.exe start`), then `xdg-open`/`gio`, and fall back to printing
+  the output path instead of a raw `gio` error.
+
 ## 1.5.0 - 2026-11-15
 
 * **Device serial in the file names**: the stamp is now

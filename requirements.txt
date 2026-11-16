@@ -1,7 +1,8 @@
-# Reference only -- the supported install is environment.yml (mamba/conda-forge).
-# Do not use pip for this project; see README.md "Install".
+# The supported install is environment.yml (mamba/conda-forge).
+# These pins are also used by the project-local .venv fallback in README.md.
 #
 # geolux_tui.py
 pyserial>=3.5
 # plot_radar.py
 bokeh>=3.4          # bokeh 3.4.x is the last line that supports Python 3.9
+numpy>=1.21         # FFT / power spectrum panel

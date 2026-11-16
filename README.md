@@ -73,8 +73,8 @@ this project:
 * mixing pip into a conda environment can silently break binary packages
   (numpy, tornado, ...) that `bokeh` depends on.
 
-`requirements.txt` is kept for reference only — the supported install is the
-`environment.yml` below.
+`requirements.txt` is kept for the project-local venv fallback in step 2b;
+the supported install is the `environment.yml` below.
 
 ### 1. Install mamba (Miniforge)
 
@@ -95,23 +95,63 @@ Snapdragon/ARM Windows machines).
 cd ~/github-projects/geolux-radar   # wherever the programs live
 mamba env create -f environment.yml
 mamba activate radar
-python -c "import serial, bokeh; print(serial.__version__, bokeh.__version__)"
-# 3.5 3.4.3        (or newer bokeh on Python 3.10+)
+python -c "import serial, bokeh, numpy; print(serial.__version__, bokeh.__version__, numpy.__version__)"
+# 3.5 3.4.3 1.26.4   (or newer bokeh/numpy on Python 3.10+)
 ```
 
-`environment.yml` asks for `python>=3.9`, `pyserial>=3.5` and `bokeh>=3.4`, and
-mamba's solver picks a compatible set: bokeh 3.4.x on Python 3.9, newer bokeh
-on 3.10+. Nothing is hard-pinned, so the environment keeps working across
-releases.
+`environment.yml` asks for `python>=3.9`, `pyserial>=3.5`, `bokeh>=3.4` and
+`numpy>=1.21`, and mamba's solver picks a compatible set: bokeh 3.4.x on
+Python 3.9, newer bokeh on 3.10+. Nothing is hard-pinned, so the environment
+keeps working across releases.
+
+If the `radar` environment already existed before `numpy` was added for the
+FFT panel, a standalone `./plot_radar.py` run reports that numpy is missing.
+Refresh the environment once:
+
+```bash
+mamba env update -n radar -f environment.yml --prune
+```
 
 Everything the programs need is in that environment: `curses` and `termios`
 ship with CPython on Linux, so no system packages are required.
+
+### 2b. Fallback when mamba is not available
+
+If mamba cannot be installed, a dedicated virtual environment inside the
+checkout is enough to run both programs. It is gitignored, and nothing is
+installed into the system Python:
+
+```bash
+cd ~/github-projects/geolux-radar
+/usr/bin/python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python ./plot_radar.py --help
+```
+
+With the `.venv` in place, plain `./plot_radar.py ...` automatically restarts
+itself with `.venv/bin/python` when the Python that started it cannot import
+numpy or bokeh. You can also invoke it explicitly or activate the venv:
+
+```bash
+./plot_radar.py --remove-missing=15.000 data/2026-1116/2026-1116-145652-102182-radar.txt.gz
+./.venv/bin/python ./plot_radar.py --remove-missing=15.000 data/2026-1116/2026-1116-145652-102182-radar.txt.gz
+source .venv/bin/activate
+./plot_radar.py --live --no-open
+```
+
+This is a local fallback; mamba/conda-forge remains the supported install for
+deployment.
 
 ### 3. Run without activating (scripts, cron, systemd)
 
 ```bash
 mamba run -n radar ./geolux_tui.py -d ~/radar-logs
+mamba run -n radar ./plot_radar.py --no-open
 ```
+
+`mamba run` uses the environment even when it is not activated, so it is the
+reliable choice for scripts, cron jobs and shell aliases. Without mamba, use
+`./.venv/bin/python ./plot_radar.py ...` instead.
 
 ### 4. Serial port access
 
@@ -276,8 +316,9 @@ reset, `b` reboot, `n` new log file, `i` device settings, `g` refresh,
 ./plot_radar.py --live --no-open --port 5006        # http://localhost:5006
 ```
 
-Use `--no-open` and open things from Windows: WSL2 forwards `localhost`, and
-the static HTML is reachable at `\\wsl$\Ubuntu\home\<user>\...`.
+`plot_radar.py` tries the Windows browser first on WSL. Use `--no-open` if you
+prefer to open things manually: WSL2 forwards `localhost`, and the static HTML
+is reachable at `\\wsl$\Ubuntu\home\<user>\...`.
 
 ### Day-to-day on WSL2
 
@@ -385,8 +426,11 @@ cd ~/github-projects/geolux-radar && ./geolux_tui.py
 
 #### Plotting and the browser
 
-27. **Nothing opens after `plot_radar.py`.** The browser opener inside WSL
-    usually does nothing; use `--no-open` and open the file/URL yourself.
+27. **Nothing opens after `plot_radar.py`.** The plotter tries `wslview`,
+    then the Windows default browser through `cmd.exe start`, then
+    `xdg-open`/`gio`; if none works it prints the file path instead of the raw
+    `gio` error. Use `--no-open` to skip the attempt entirely and open the
+    file/URL yourself.
 28. **Opening the static HTML from Windows.** Use
     `\\wsl$\Ubuntu\home\<user>\<file>-plot.html` in Explorer, or install
     `wslu` and run `wslview <file>`.
@@ -875,6 +919,8 @@ On a pipe or with `</dev/null` the newest log is used automatically.
 ./plot_radar.py -o plot.html --no-open       # choose the output, no browser
 ./plot_radar.py --inline                     # self-contained HTML (offline)
 ./plot_radar.py --live --port 5006           # auto-refreshing Bokeh server
+./plot_radar.py --remove-missing=15.000      # hide L1 = 15.000 missing rows
+./plot_radar.py --spectrum-scale log         # log-scale FFT power axis
 ```
 
 | Option | Default | Meaning |
@@ -889,8 +935,11 @@ On a pipe or with `</dev/null` the newest log is used automatically.
 | `--no-open` | off | do not open a browser |
 | `--inline` | off | embed BokehJS for offline use (~1.4 MB HTML) |
 | `--max-points` | `100000` | decimate long logs / cap live points (0 = keep all) |
+| `--remove-missing VALUE` | off for time plots; FFT drops `15.000` | drop L1 samples equal to `VALUE` from the time plots and the FFT; repeat the option for several values (also `--drop-missing`) |
+| `--spectrum-scale` | `linear` | FFT power-panel Y axis: `linear` or `log` |
 
-Panels (x axis linked, toolbar above the distance panel):
+Panels (the three time panels share their x axis; each panel has its own
+toolbar):
 
 1. **Distance** — actual `L1` (solid, circles) and average `L2` (dashed,
    crosses); legend entries `L1 line`, `L1 points`, `L2 line`, `L2 points`.
@@ -898,18 +947,43 @@ Panels (x axis linked, toolbar above the distance panel):
    `SNR line` and `SNR points`.
 3. **Temperature** — instrument °C; legend entries `Temp line` and
    `Temp points`.
+4. **Spectrum** — one-sided FFT power spectrum of the L1 (actual distance)
+   series against frequency in Hz. The y axis is linear power by default;
+   `--spectrum-scale log` switches it to a logarithmic power axis. Legend
+   entries `L1 power` and `L1 power points`. L1 samples at `15.000` — the
+   LX-80 no-echo sentinel — are dropped by default before processing, because
+   they would otherwise add broadband spikes. The irregular ~10 Hz samples are
+   then linearly resampled onto a uniform grid using the median sampling
+   interval.
+   A least-squares straight line is removed — not just the mean — so the DC
+   bin and the slow baseline drift that would leak into the lowest frequency
+   bins are suppressed; a Hann window then reduces the remaining leakage. The
+   DC bin itself is dropped (it cannot be shown on a log axis), and hover
+   reports frequency, `log10(power)`, amplitude and power.
 
-Every series is a line plus markers (5–6 px, alpha 0.85) so individual
+With no option the `15.000` no-echo rows remain visible in the three time
+panels as spikes, while the spectrum drops the built-in `15.000` sentinel.
+`--remove-missing=VALUE` (alias `--drop-missing`) makes the filter explicit
+and applies it to the time panels too: every L1 sample equal to `VALUE` is
+removed from all four panels and from the FFT. Repeat the option for several
+sentinels, for example `--remove-missing=15.000 --remove-missing=-999`. The
+values replace the built-in FFT sentinel. In live mode newly streamed rows are
+filtered too.
+
+Every series is a line plus markers (3–6 px, alpha 0.65–0.85) so individual
 samples stay visible when zoomed in. **Mouse-wheel zoom is active by
-default** on all three panels — scroll to zoom, drag to pan, without
-selecting a tool first; box zoom, undo/redo, reset and save are in the
-toolbar. Each panel has its own legend and the click policy is *hide*; the
-line and the markers of a series have **separate** legend entries, so points
-and lines can be enabled/disabled independently on every panel without
-re-plotting.
+default** on all four panels — scroll to zoom, drag to pan, without
+selecting a tool first; box zoom, undo/redo, reset and save are in each
+panel's own toolbar. Each panel has its own legend and the click policy is
+*hide*; the line and the markers of a series have **separate** legend entries,
+so points and lines can be enabled/disabled independently on every panel
+without re-plotting.
 
-A vertical-line hover tool on each panel shows time, distance, SNR and
-temperature; a banner above the plots summarises samples, duration,
+Hover is off by default in every panel. Click the hover tool in a panel's
+toolbar to enable it: a vertical-line hover on each time panel then shows time,
+distance, SNR and temperature, and the spectrum panel's hover shows frequency,
+log10 power, amplitude and power regardless of the selected Y-axis scale. A
+banner above the plots summarises samples, duration,
 min/median/max distance, median SNR and average temperature, and carries the
 program version.
 

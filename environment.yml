@@ -11,3 +11,4 @@ dependencies:
   - python>=3.9        # 3.10+ if you want a bokeh newer than 3.4.x
   - pyserial>=3.5
   - bokeh>=3.4
+  - numpy>=1.21        # FFT / power spectrum panel in plot_radar.py
