@@ -4,6 +4,16 @@ All notable changes to this project.  The version lives in `version.py` and
 is shown by `--version`, in the TUI header and help overlay, and in every
 plot.  Tags are named `vX.Y.Z`.
 
+## 1.4.0 - 2026-11-15
+
+* **New-file command** (`n`): closes the current recording and starts a fresh
+  `<stamp>-radar.txt.gz` + `-radar-cmd.log.gz` + `-radar-info.txt.gz` set
+  without leaving the TUI.  The prompt is preloaded with the current time in
+  the same `YYYY-MMDD-HHMMSS` scheme, `Ctrl-U` clears it, `Esc` cancels, and
+  existing names are rejected.  Rotation is serialised with the reader and
+  probe threads, so no rows are lost and the old gzip files are closed
+  cleanly.
+
 ## 1.3.0 - 2026-11-15
 
 * **Reboot command** (`b`): sends the undocumented `#reset`, which restarts

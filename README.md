@@ -2,7 +2,7 @@
 
 2026-1014 W. Wright github.com/lidar532
 
-Version **1.3.0** (`version.py`, git tag `v1.3.0`). The version is shown by
+Version **1.4.0** (`version.py`, git tag `v1.4.0`). The version is shown by
 `--version` in both programs, in the TUI header and help overlay, and in the
 title and summary banner of every plot; see [CHANGELOG.md](CHANGELOG.md) for
 what changed in each release.  The repository URL
@@ -264,8 +264,8 @@ adapter's transmit line reaches the device:
 ```
 
 Keys: `q` quit, `p` pause logging, `f` freeze, `s` set parameter, `r` factory
-reset, `b` reboot, `i` device settings, `g` refresh, `c` reset counters,
-`?` help, `Esc` close a panel.
+reset, `b` reboot, `n` new log file, `i` device settings, `g` refresh,
+`c` reset counters, `?` help, `Esc` close a panel.
 
 ### Step 7 — WSL2: record and plot
 
@@ -419,7 +419,7 @@ cd ~/github-projects/geolux-radar && ./geolux_tui.py
 ...
  csum 0 err / 2345 sent (0.00%) · no errors   ·   c: reset
  $LVX,3.576,3.576,32,6.423,6.423,47.250,1.115*5F
- q quit  p pause log  f freeze  s set  r reset  b reboot  i settings  g refresh  ? help
+ q quit  p pause log  f freeze  s set  r reset  b reboot  n new log  i settings  g refresh  ? help
 ```
 
 * **Header** — port/baud, state, frame rate, frame count and time since the
@@ -466,6 +466,7 @@ unit is used in the CSV column names.
 | `s` | open the **set parameter** dialog |
 | `r` | **factory reset** the device (`Are you sure?` popup, `y`/`n`) |
 | `b` | **reboot** the device, settings kept (`Are you sure?` popup) |
+| `n` | **start a new log file** (prompt, preloaded with the timestamp name) |
 | `i` | device settings panel (the whole `#get_info` block) |
 | `g` | probe now / refresh the settings |
 | `c` | reset the checksum counters |
@@ -914,6 +915,39 @@ The unit is read from the CSV header, so `m`, `ft`, `mm`, `cm` and `in` all
 work, and empty cells are plotted as gaps.
 
 Exit status: `0` success, `2` no log file found.
+
+### Starting a new file (n)
+
+Press `n` to close the current recording and start a fresh set of files
+without leaving the TUI:
+
+```
+┌─ New recording ───────────────────────────────────────────────┐
+│ Close the current files and start a new set in:               │
+│ /home/wright/github-projects/geolux-radar/data/2026-1115      │
+│                                                               │
+│ name: 2026-1115-173015_                                       │
+│ -> 2026-1115-173015-radar.txt.gz                              │
+│ the probe log and settings snapshot use the same name         │
+│  Enter: start   Ctrl-U: clear   Esc: cancel                   │
+└───────────────────────────────────────────────────────────────┘
+```
+
+* The field is **preloaded** with the same `YYYY-MMDD-HHMMSS` stamp used for
+  the run's initial files (taken at the moment you press `n`), so pressing
+  `Enter` simply continues the naming scheme.
+* Edit the name freely (`A-Z a-z 0-9 - _ .`); a pasted file name such as
+  `2026-1115-173015-radar.txt.gz` is reduced to its stamp.  `Ctrl-U` clears
+  the field, `Esc` cancels.
+* The three files are created together: `<stamp>-radar.txt.gz`,
+  `<stamp>-radar-cmd.log.gz` (if probing is on) and
+  `<stamp>-radar-info.txt.gz` (a fresh snapshot of the current settings).
+* The current files are closed cleanly (the gzip stream is finished, so they
+  can be plotted immediately), a name that already exists is rejected with an
+  error, and with `--no-log` the command reports that logging is off.
+* Rotation is safe while recording: writes from the reader thread are
+  serialised with the rotation, so no row is lost or written to the wrong
+  file.  The new path appears on line 1 as soon as the switch is done.
 
 ---
 

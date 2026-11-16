@@ -389,19 +389,27 @@ class Recorder:
 
     The file is gzip-compressed and sync-flushed after every row, so it is
     complete and readable even if the program is killed, and plot_radar.py
-    can tail it in --live mode.
+    can tail it in --live mode.  rotate() starts a new file with the same
+    naming scheme; writes from the reader thread are serialised with it.
     """
 
     def __init__(self, directory: str, units: str, stamp: str):
-        self.path = os.path.join(directory or ".", f"{stamp}-radar.txt.gz")
+        self._lock = threading.Lock()
+        self.directory = directory or "."
+        self.units = units
+        self._open(stamp)
+
+    def _open(self, stamp: str):
+        self.stamp = stamp
+        self.path = os.path.join(self.directory, f"{stamp}-radar.txt.gz")
         self._fh = gzip.open(self.path, "wt", newline="", encoding="utf-8")
         self._writer = csv.writer(self._fh)
         self._writer.writerow(
             [
                 "captured_at",
                 "epoch_seconds",
-                f"actual_distance_{units}",
-                f"average_distance_{units}",
+                f"actual_distance_{self.units}",
+                f"average_distance_{self.units}",
                 "snr_db",
                 "temperature_c",
                 "raw_sentence",
@@ -410,26 +418,38 @@ class Recorder:
         self._fh.flush()
         self.rows = 0
 
+    def rotate(self, stamp: str) -> str:
+        """Close the current log and start <stamp>-radar.txt.gz."""
+        with self._lock:
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+            self._open(stamp)
+        return self.path
+
     def write(self, fields, raw, stamp, epoch):
-        self._writer.writerow(
-            [
-                stamp.isoformat(timespec="milliseconds"),
-                f"{epoch:.3f}",
-                _cell(fields.get("L1")),
-                _cell(fields.get("L2")),
-                _cell(fields.get("S1")),
-                _cell(fields.get("T1")),
-                raw,
-            ]
-        )
-        self._fh.flush()
-        self.rows += 1
+        with self._lock:
+            self._writer.writerow(
+                [
+                    stamp.isoformat(timespec="milliseconds"),
+                    f"{epoch:.3f}",
+                    _cell(fields.get("L1")),
+                    _cell(fields.get("L2")),
+                    _cell(fields.get("S1")),
+                    _cell(fields.get("T1")),
+                    raw,
+                ]
+            )
+            self._fh.flush()
+            self.rows += 1
 
     def close(self):
-        try:
-            self._fh.close()
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                self._fh.close()
+            except Exception:
+                pass
 
 
 def _cell(value):
@@ -437,9 +457,13 @@ def _cell(value):
 
 
 class CommandLog:
-    """Append-only probe history: sent_at, command, ok, rtt_ms, ... (gzipped)"""
+    """Probe history: sent_at, command, ok, rtt_ms, ... (gzipped, rotatable)"""
 
     def __init__(self, path: str):
+        self._lock = threading.Lock()
+        self._open(path)
+
+    def _open(self, path: str):
         self.path = path
         self._fh = gzip.open(path, "wt", newline="", encoding="utf-8")
         self._writer = csv.writer(self._fh)
@@ -447,25 +471,89 @@ class CommandLog:
         self._fh.flush()
         self.lines = 0
 
+    def rotate(self, path: str) -> str:
+        """Close the current probe log and continue in *path*."""
+        with self._lock:
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+            self._open(path)
+        return self.path
+
     def write(self, sent_at, command, ok, rtt, n_lines, error=""):
-        self._writer.writerow(
-            [
-                dt.datetime.fromtimestamp(sent_at).astimezone().isoformat(timespec="milliseconds"),
-                command,
-                int(ok),
-                "" if rtt is None else f"{rtt:.1f}",
-                n_lines,
-                error,
-            ]
-        )
-        self._fh.flush()
-        self.lines += 1
+        with self._lock:
+            self._writer.writerow(
+                [
+                    dt.datetime.fromtimestamp(sent_at).astimezone().isoformat(timespec="milliseconds"),
+                    command,
+                    int(ok),
+                    "" if rtt is None else f"{rtt:.1f}",
+                    n_lines,
+                    error,
+                ]
+            )
+            self._fh.flush()
+            self.lines += 1
 
     def close(self):
-        try:
-            self._fh.close()
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+
+
+LOG_SUFFIXES = (
+    "-radar-cmd.log.gz", "-radar-cmd.log",
+    "-radar-info.txt.gz", "-radar-info.txt",
+    "-radar.txt.gz", "-radar.txt",
+)
+
+
+def normalise_stamp(name: str) -> str:
+    """Strip a known log suffix, so a pasted file name becomes its stamp."""
+    name = (name or "").strip()
+    for suffix in LOG_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def stamp_error(name: str, directory: str) -> str:
+    """Return an error message for an unusable recording name, else ''."""
+    if not name:
+        return "enter a name"
+    if name in (".", "..") or name.startswith("."):
+        return "name must not start with a dot"
+    if any(ch in name for ch in ("/", "\\", "\x00")):
+        return "no path separators - the directory is fixed"
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                  "0123456789-._")
+    bad = sorted(set(name) - allowed)
+    if bad:
+        return f"invalid character {bad[0]!r}"
+    for suffix in ("-radar.txt.gz", "-radar-cmd.log.gz", "-radar-info.txt.gz"):
+        if os.path.exists(os.path.join(directory, f"{name}{suffix}")):
+            return f"already exists: {name}{suffix}"
+    return ""
+
+
+def rotate_logs(recorder, cmd_log, link, directory: str, stamp: str, meta):
+    """Start a new set of files for *stamp*; returns the new data path."""
+    path = recorder.rotate(stamp) if recorder is not None else None
+    if cmd_log is not None:
+        cmd_log.rotate(os.path.join(directory, f"{stamp}-radar-cmd.log.gz"))
+    if link is not None:
+        snapshot = os.path.join(directory, f"{stamp}-radar-info.txt.gz")
+        link.snapshot_path = snapshot
+        meta["snapshot_path"] = snapshot
+        if link.info:
+            try:
+                write_info_snapshot(snapshot, link.info)
+            except OSError:
+                pass
+    return path
 
 
 # --------------------------------------------------------------------------
@@ -1248,6 +1336,7 @@ HELP_TEXT = f"""\
    s        set a device parameter (dialog)
    r        factory reset ("Are you sure?" popup - see below)
    b        reboot, settings kept ("Are you sure?" popup)
+   n        start a new log file (name prompt, default timestamp)
    i        device settings panel (the whole #get_info block)
    g        probe now / refresh the settings
    c        reset the checksum counters
@@ -1270,6 +1359,13 @@ HELP_TEXT = f"""\
    Verified on firmware 2.5.4: the reset link stayed up (the manual suggests a
    power cycle) and the unit came back in mm with sensor_height 0; #reset kept
    every setting (iwr_status is a status field and dips to 0 while booting).
+
+ NEW FILE (n)
+   Closes the current recording and starts a fresh set of files without
+   leaving the TUI.  The prompt is preloaded with the same naming scheme as
+   the start-up file (YYYY-MMDD-HHMMSS, the current time); edit it or press
+   Enter to accept, Ctrl-U clears the field, Esc cancels.  The probe log and
+   the settings snapshot are renamed with the same stamp.
 
  FILES (in -d DIR, default data/YYYY-MMDD, one directory per day; all gzipped)
    <stamp>-radar.txt.gz        CSV, one row per measurement frame
@@ -1300,6 +1396,59 @@ def draw_help(stdscr, h, w, offset=0):
     stdscr.noutrefresh()
     curses.doupdate()
     return offset
+
+
+def draw_newfile_dialog(stdscr, h, w, dlg, directory):
+    """Modal prompt for the name of the next recording (default stamp loaded)."""
+    if h < 12 or w < 52:
+        stdscr.erase()
+        addstr(stdscr, 0, 0,
+               " new-file dialog needs at least 52x12 - Esc to cancel "[: w - 1],
+               COLORS.get("error", curses.A_BOLD))
+        stdscr.noutrefresh()
+        curses.doupdate()
+        return
+
+    box = box_chars()
+    inner_w = min(max(50, w - 10), 70)
+    box_h = min(12, h - 2)
+    y0 = max(1, (h - box_h) // 2)
+    x0 = max(1, (w - inner_w) // 2)
+    box_w = inner_w
+    border = COLORS.get("border", curses.A_DIM)
+
+    for dy in range(box_h):
+        addstr(stdscr, y0 + dy, x0, " " * box_w, curses.A_NORMAL)
+    addstr(stdscr, y0, x0, box["tl"] + box["h"] * (box_w - 2) + box["tr"], border)
+    for dy in range(1, box_h - 1):
+        addstr(stdscr, y0 + dy, x0, box["v"], border)
+        addstr(stdscr, y0 + dy, x0 + box_w - 1, box["v"], border)
+    addstr(stdscr, y0 + box_h - 1, x0, box["bl"] + box["h"] * (box_w - 2) + box["br"], border)
+
+    addstr(stdscr, y0, x0 + 2, " New recording ",
+           COLORS.get("title", curses.A_BOLD))
+    iw = box_w - 4
+
+    addstr(stdscr, y0 + 2, x0 + 2,
+           "Close the current files and start a new set in:"[:iw], curses.A_DIM)
+    addstr(stdscr, y0 + 3, x0 + 2, os.path.abspath(directory)[:iw],
+           COLORS.get("value", 0))
+    buf = dlg.get("buffer", "")
+    addstr(stdscr, y0 + 5, x0 + 2, "name:", curses.A_DIM)
+    addstr(stdscr, y0 + 5, x0 + 10, (buf + "_")[: max(0, iw - 8)],
+           COLORS.get("primary", curses.A_BOLD))
+    stamp = normalise_stamp(buf)
+    addstr(stdscr, y0 + 7, x0 + 2,
+           f"-> {stamp or '?'}-radar.txt.gz"[:iw], curses.A_DIM)
+    if dlg.get("error"):
+        addstr(stdscr, y0 + 8, x0 + 2, dlg["error"][:iw],
+               COLORS.get("error", curses.A_BOLD))
+    else:
+        addstr(stdscr, y0 + 8, x0 + 2,
+               "the probe log and settings snapshot use the same name"[:iw],
+               curses.A_DIM)
+    addstr(stdscr, y0 + box_h - 2, x0 + 2,
+           " Enter: start   Ctrl-U: clear   Esc: cancel "[:iw], curses.A_DIM)
 
 
 def draw_confirm_dialog(stdscr, h, w, dlg):
@@ -1511,10 +1660,13 @@ def draw(stdscr, shared: SharedState, meta, recorder, view):
     addstr(stdscr, h - 2, 0, f" {raw}"[: w - 1], curses.A_DIM)
 
     keys = (" q quit  p pause log  f freeze  s set  r reset  b reboot"
-            "  i settings  g refresh  ? help ")
+            "  n new log  i settings  g refresh  ? help ")
     addstr(stdscr, h - 1, 0, keys.ljust(w - 1)[: w - 1], curses.A_REVERSE)
 
-    if view.get("confirm"):
+    if view.get("newfile"):
+        draw_newfile_dialog(stdscr, h, w, view["newfile"],
+                            meta.get("log_dir") or ".")
+    elif view.get("confirm"):
         draw_confirm_dialog(stdscr, h, w, view["confirm"])
     elif view.get("dialog"):
         draw_set_dialog(stdscr, h, w, view["dialog"], meta,
@@ -1551,6 +1703,42 @@ def run_tui(stdscr, shared: SharedState, meta, recorder, link):
                 view["help_offset"] = max(0, view.get("help_offset", 0) - 10)
             elif ch in (ord("q"), ord("Q")):
                 break
+            draw(stdscr, shared, meta, recorder, view)
+            if meta["duration"] and time.time() - shared.start >= meta["duration"]:
+                break
+            continue
+
+        # ---- modal new-file dialog ----
+        nf = view.get("newfile")
+        if nf is not None:
+            if ch == 27:
+                view["newfile"] = None
+            elif ch == 21:                      # Ctrl-U clears the preloaded name
+                nf["buffer"] = ""
+                nf["error"] = None
+            elif ch in (curses.KEY_BACKSPACE, 8, 127):
+                nf["buffer"] = nf.get("buffer", "")[:-1]
+                nf["error"] = None
+            elif ch in (10, 13, curses.KEY_ENTER):
+                name = normalise_stamp(nf.get("buffer", ""))
+                directory = meta.get("log_dir") or "."
+                err = stamp_error(name, directory)
+                if recorder is None:
+                    nf["error"] = "logging is off (--no-log)"
+                elif err:
+                    nf["error"] = err
+                else:
+                    rotate_logs(recorder,
+                                link.cmd_log if link is not None else None,
+                                link, directory, name, meta)
+                    view["newfile"] = None
+            elif 32 <= ch < 127 and len(nf.get("buffer", "")) < 80:
+                nf["buffer"] = nf.get("buffer", "") + chr(ch)
+                nf["error"] = None
+
+            if link is not None:
+                view["link"] = link.snapshot()
+                view["info"] = view["link"]["info"]
             draw(stdscr, shared, meta, recorder, view)
             if meta["duration"] and time.time() - shared.start >= meta["duration"]:
                 break
@@ -1661,6 +1849,12 @@ def run_tui(stdscr, shared: SharedState, meta, recorder, link):
         elif ch in (ord("b"), ord("B")):
             view["confirm"] = {"action": "reboot", "phase": "sure"}
             view["show_info"] = False
+        elif ch in (ord("n"), ord("N")):
+            view["newfile"] = {
+                "buffer": dt.datetime.now().strftime("%Y-%m%d-%H%M%S"),
+                "error": None,
+            }
+            view["show_info"] = False
         elif ch in (ord("i"), ord("I")):
             view["show_info"] = not view["show_info"]
         elif ch == 27:                       # Esc closes the settings panel
@@ -1758,9 +1952,9 @@ tui keys:
   q  quit                    p  pause / resume CSV logging
   f  freeze the display      s  set a device parameter (dialog)
   r  factory reset           b  reboot (settings kept)
-  c  reset the counters      i  device settings panel
-  ?  key overview and help   g  refresh settings (#get_info now)
-  Esc close a panel or dialog
+  n  start a new log file    i  device settings panel
+  c  reset the counters      g  refresh settings (#get_info now)
+  ?  key overview and help   Esc close a panel or dialog
 
   The set dialog (s) is a single "set" command: pick the parameter from the
   dropdown with j/k or the arrow keys, Enter to edit, type the value, Enter
@@ -1777,6 +1971,11 @@ sharing one YYYY-MMDD-HHMMSS stamp; every file is gzip-compressed):
   CSV columns:
     captured_at, epoch_seconds, actual_distance_<unit>, average_distance_<unit>,
     snr_db, temperature_c, raw_sentence
+
+  n starts a new set without restarting: the prompt is preloaded with the
+  current time in the same YYYY-MMDD-HHMMSS form, so pressing Enter continues
+  the naming scheme.  Ctrl-U clears the field; the probe log and settings
+  snapshot follow the new stamp.
 
 tx probe and link health:
   The LX-80 only transmits NMEA, so received data cannot prove your transmit
@@ -1970,6 +2169,7 @@ def main(argv=None):
         "units": units,
         "duration": args.duration,
         "snapshot_path": snapshot_path,
+        "log_dir": log_dir,
         "probe_enabled": not args.no_probe,
     }
 
