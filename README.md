@@ -2,7 +2,7 @@
 
 2026-1014 W. Wright github.com/lidar532
 
-Version **1.5.0** (`version.py`, git tag `v1.5.0`). The version is shown by
+Version **1.6.0** (`version.py`, git tag `v1.6.0`). The version is shown by
 `--version` in both programs, in the TUI header and help overlay, and in the
 title and summary banner of every plot; see [CHANGELOG.md](CHANGELOG.md) for
 what changed in each release.  The repository URL

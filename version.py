@@ -8,7 +8,7 @@ Bump VERSION for every release and tag the commit in git:
 Both programs print it: `--version`, the TUI header and every plot title.
 """
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 # Shown at the top of the TUI and of every plot.
 REPO_URL = "https://github.com/lidar532/geolux-radar"

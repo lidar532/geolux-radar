@@ -4,7 +4,7 @@ All notable changes to this project.  The version lives in `version.py` and
 is shown by `--version`, in the TUI header and help overlay, and in every
 plot.  Tags are named `vX.Y.Z`.
 
-## Unreleased
+## 1.6.0 - 2026-11-16
 
 * `plot_radar.py`: new FFT power-spectrum panel for the L1 (actual distance)
   series.  L1 samples at 15.000 (the no-echo sentinel) are dropped, the
